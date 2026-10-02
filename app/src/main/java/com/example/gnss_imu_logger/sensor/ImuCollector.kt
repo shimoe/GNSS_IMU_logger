@@ -18,7 +18,9 @@ import java.io.Closeable
 class ImuCollector(
     private val sensorManager: SensorManager,
     private val session: SessionContext,
-    private val onFatalError: (String, Throwable?) -> Unit
+    private val onFatalError: (String, Throwable?) -> Unit,
+    private val onAccelerometerUpdated: (Long, FloatArray) -> Unit = { _, _ -> },
+    private val onGyroscopeUpdated: (Long, FloatArray) -> Unit = { _, _ -> }
 ) : SensorEventListener, Closeable {
     private val accelStats = SensorStats()
     private val gyroStats = SensorStats()
@@ -51,12 +53,14 @@ class ImuCollector(
         when (event.sensor.type) {
             Sensor.TYPE_ACCELEROMETER_UNCALIBRATED -> {
                 accelStats.add(event.timestamp)
+                onAccelerometerUpdated(event.timestamp, event.values.copyOf())
                 if (accelWriter?.offer(event.timestamp, event.values, event.accuracy) == false) {
                     onFatalError("加速度ログの書き込み待ちデータが上限に達しました", null)
                 }
             }
             Sensor.TYPE_GYROSCOPE_UNCALIBRATED -> {
                 gyroStats.add(event.timestamp)
+                onGyroscopeUpdated(event.timestamp, event.values.copyOf())
                 if (gyroWriter?.offer(event.timestamp, event.values, event.accuracy) == false) {
                     onFatalError("ジャイロログの書き込み待ちデータが上限に達しました", null)
                 }

@@ -123,6 +123,10 @@ private fun LoggerScreen(
         Text("GNSS更新経過: ${snapshot.lastLocationAgeMs?.let { "$it ms" } ?: "未取得"}")
         Text("加速度: %.1f Hz".format(snapshot.accelerometerRateHz))
         Text("ジャイロ: %.1f Hz".format(snapshot.gyroscopeRateHz))
+        Text("静止判定: ${if (snapshot.stationary) "静止" else "未成立"}")
+        Text("静止継続: %.1f 秒".format(snapshot.stationaryDurationMs / 1_000.0))
+        Text("加速度ノルム: ${snapshot.accelerationNormMps2?.let { "%.3f m/s²".format(it) } ?: "未取得"}")
+        Text("角速度ノルム: ${snapshot.gyroscopeNormRadps?.let { "%.4f rad/s".format(it) } ?: "未取得"}")
         Text("計測時間: %02d:%02d".format(snapshot.sessionElapsedMs / 60_000, snapshot.sessionElapsedMs / 1_000 % 60))
 
         Row(verticalAlignment = Alignment.CenterVertically) {

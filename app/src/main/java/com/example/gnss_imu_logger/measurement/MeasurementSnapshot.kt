@@ -13,7 +13,11 @@ data class MeasurementSnapshot(
     val lastLocationAgeMs: Long? = null,
     val accelerometerRateHz: Double = 0.0,
     val gyroscopeRateHz: Double = 0.0,
-    val sessionElapsedMs: Long = 0L
+    val sessionElapsedMs: Long = 0L,
+    val stationary: Boolean = false,
+    val stationaryDurationMs: Long = 0L,
+    val accelerationNormMps2: Double? = null,
+    val gyroscopeNormRadps: Double? = null
 )
 
 fun interface MeasurementStateListener {

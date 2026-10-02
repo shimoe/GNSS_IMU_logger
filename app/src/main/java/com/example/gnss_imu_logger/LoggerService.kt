@@ -6,6 +6,8 @@ import android.hardware.SensorManager
 import android.location.LocationManager
 import android.os.*
 import androidx.core.app.NotificationCompat
+import com.example.gnss_imu_logger.calibration.StationaryDetector
+import com.example.gnss_imu_logger.calibration.StationaryStatus
 import com.example.gnss_imu_logger.log.SessionContext
 import com.example.gnss_imu_logger.measurement.*
 import com.example.gnss_imu_logger.model.*
@@ -30,6 +32,10 @@ class LoggerService : Service() {
     private var latestLocationNs:Long?=null; private var latestAccuracyM:Float?=null
     private var qualityMonitor: GnssQualityMonitor? = null
     private var measurementTimeline: MeasurementTimeline? = null
+    private var stationaryDetector: StationaryDetector? = null
+    @Volatile
+    private var stationaryStatus = StationaryStatus.waiting()
+    private var stationaryEventReported = false
     private val stateListeners = mutableSetOf<MeasurementStateListener>()
     @Volatile
     private var latestSnapshot = MeasurementSnapshot()
@@ -74,16 +80,53 @@ class LoggerService : Service() {
             readinessEvaluator=ReadinessEvaluator()
             qualityMonitor=GnssQualityMonitor()
             measurementTimeline=MeasurementTimeline()
+            stationaryDetector=StationaryDetector()
+            stationaryStatus=StationaryStatus.waiting()
+            stationaryEventReported=false
             s.event(EventLevel.INFO,EventType.SERVICE_STARTED,"計測サービスを開始しました")
             if(incomplete.isNotEmpty())s.event(EventLevel.WARNING,EventType.INCOMPLETE_SESSION_FOUND,"未完了セッションを${incomplete.size}件検出しました")
             acquireWakeLock();storageMonitor=StorageMonitor(s.directory,{b->s.event(EventLevel.WARNING,EventType.LOW_STORAGE,"保存先の空き容量が少なくなりました: $b bytes")},{b->s.event(EventLevel.ERROR,EventType.LOW_STORAGE,"保存先の空き容量が停止基準を下回りました: $b bytes");stopLogging()}).also{it.start()}
-            imuCollector=ImuCollector(sensorManager,s,::postFatalError).also{it.start()}
+            imuCollector=ImuCollector(
+                sensorManager,
+                s,
+                ::postFatalError,
+                onAccelerometerUpdated = { timestampNs, values ->
+                    updateStationary(
+                        stationaryDetector?.addAccelerometer(timestampNs, values)
+                    )
+                },
+                onGyroscopeUpdated = { timestampNs, values ->
+                    updateStationary(
+                        stationaryDetector?.addGyroscope(timestampNs, values)
+                    )
+                }
+            ).also { it.start() }
             gnssCollector=GnssCollector(this,locationManager,s,::postFatalError){t,u,a,c->latestLocationNs=t;latestUsedSatellites=u;latestAccuracyM=a;consecutiveLocationCount=c}.also{it.start()}
             environmentCollector=EnvironmentCollector(sensorManager,s,::postFatalError).also{it.start()}
             stateMachine?.transitionTo(MeasurementState.WAITING_FOR_GNSS,"センサーとGNSSの初期化が完了しました")
             readinessCheckRunning=true;mainHandler.post(readinessCheck)
         }catch(e:Throwable){handleFatalError("計測を開始できませんでした",e)}
     }
+    private fun updateStationary(status: StationaryStatus?) {
+        if (status == null) return
+        stationaryStatus = status
+        if (status.stationary && !stationaryEventReported) {
+            stationaryEventReported = true
+            session?.event(
+                EventLevel.INFO,
+                EventType.STATIONARY_DETECTED,
+                "静止状態を2秒間確認しました"
+            )
+        } else if (!status.candidate && stationaryEventReported) {
+            stationaryEventReported = false
+            session?.event(
+                EventLevel.INFO,
+                EventType.STATIONARY_LOST,
+                "端末の動きを検出しました"
+            )
+        }
+    }
+
     private fun evaluateReadiness() {
         val machine = stateMachine ?: return
         if (machine.state !in setOf(
@@ -128,7 +171,11 @@ class LoggerService : Service() {
                 lastLocationAgeMs = status.lastLocationAgeMs,
                 accelerometerRateHz = imu.accelerometer.meanRateHz,
                 gyroscopeRateHz = imu.gyroscope.meanRateHz,
-                sessionElapsedMs = session?.time?.sessionElapsedNs(nowNs)?.div(1_000_000L) ?: 0L
+                sessionElapsedMs = session?.time?.sessionElapsedNs(nowNs)?.div(1_000_000L) ?: 0L,
+                stationary = stationaryStatus.stationary,
+                stationaryDurationMs = stationaryStatus.durationMs,
+                accelerationNormMps2 = stationaryStatus.accelerationNormMps2,
+                gyroscopeNormRadps = stationaryStatus.gyroscopeNormRadps
             )
         )
 
@@ -190,6 +237,9 @@ class LoggerService : Service() {
         readinessEvaluator=null
         qualityMonitor=null
         measurementTimeline=null
+        stationaryDetector=null
+        stationaryStatus=StationaryStatus.waiting()
+        stationaryEventReported=false
         wakeLock?.takeIf{it.isHeld}?.release();wakeLock=null;stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
     }
     private fun SensorStats.Snapshot.toSummary()=SensorSummary(receivedCount,writtenCount,droppedCount,estimatedMissingCount,meanRateHz,medianIntervalMs,maximumIntervalMs)
