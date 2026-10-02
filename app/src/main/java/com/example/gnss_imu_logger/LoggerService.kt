@@ -30,10 +30,34 @@ class LoggerService : Service() {
     private var latestLocationNs:Long?=null; private var latestAccuracyM:Float?=null
     private var qualityMonitor: GnssQualityMonitor? = null
     private var measurementTimeline: MeasurementTimeline? = null
+    private val stateListeners = mutableSetOf<MeasurementStateListener>()
+    @Volatile
+    private var latestSnapshot = MeasurementSnapshot()
+    private val localBinder = LocalBinder()
     private var latestUsedSatellites=0; private var consecutiveLocationCount=0
     private var readinessCheckRunning=false
     private val running=AtomicBoolean(false); private val stopping=AtomicBoolean(false)
     private val readinessCheck=object:Runnable{override fun run(){if(!readinessCheckRunning)return;evaluateReadiness();mainHandler.postDelayed(this,READINESS_CHECK_MS)}}
+    inner class LocalBinder : Binder() {
+        fun service(): LoggerService = this@LoggerService
+    }
+
+    fun currentSnapshot(): MeasurementSnapshot = latestSnapshot
+
+    fun addStateListener(listener: MeasurementStateListener) {
+        stateListeners += listener
+        listener.onSnapshotChanged(latestSnapshot)
+    }
+
+    fun removeStateListener(listener: MeasurementStateListener) {
+        stateListeners -= listener
+    }
+
+    private fun publishSnapshot(snapshot: MeasurementSnapshot) {
+        latestSnapshot = snapshot
+        stateListeners.toList().forEach { it.onSnapshotChanged(snapshot) }
+    }
+
     override fun onCreate(){super.onCreate();sensorManager=getSystemService(SENSOR_SERVICE) as SensorManager;locationManager=getSystemService(LOCATION_SERVICE) as LocationManager;createChannel()}
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{when(intent?.action){ACTION_START->startLogging(parseMode(intent));ACTION_STOP->stopLogging()};return START_NOT_STICKY}
     private fun parseMode(i:Intent)=runCatching{LogMode.valueOf(i.getStringExtra(EXTRA_LOG_MODE)?:LogMode.NORMAL.name)}.getOrDefault(LogMode.NORMAL)
@@ -42,7 +66,10 @@ class LoggerService : Service() {
         try{
             startForeground(NOTIFICATION_ID,notification("センサーを初期化しています"))
             val docs=File(getExternalFilesDir(null),"Documents").apply{mkdirs()};val incomplete=IncompleteSessionScanner.scan(docs)
-            val s=SessionContext(this,mode);session=s;stateMachine=MeasurementStateMachine(s){updateNotification(it)}
+            val s=SessionContext(this,mode);session=s;stateMachine=MeasurementStateMachine(s) {
+                updateNotification(it)
+                publishSnapshot(latestSnapshot.copy(state = it))
+            }
             stateMachine?.transitionTo(MeasurementState.INITIALIZING,"計測開始操作を受け付けました")
             readinessEvaluator=ReadinessEvaluator()
             qualityMonitor=GnssQualityMonitor()
@@ -92,6 +119,19 @@ class LoggerService : Service() {
             true
         ) ?: return
 
+        publishSnapshot(
+            MeasurementSnapshot(
+                state = machine.state,
+                reason = status.reason,
+                usedSatellites = status.usedSatellites,
+                horizontalAccuracyM = status.horizontalAccuracyM,
+                lastLocationAgeMs = status.lastLocationAgeMs,
+                accelerometerRateHz = imu.accelerometer.meanRateHz,
+                gyroscopeRateHz = imu.gyroscope.meanRateHz,
+                sessionElapsedMs = session?.time?.sessionElapsedNs(nowNs)?.div(1_000_000L) ?: 0L
+            )
+        )
+
         when {
             status.ready && machine.state == MeasurementState.WAITING_FOR_GNSS -> {
                 if (machine.transitionTo(MeasurementState.READY, readyMessage(status))) {
@@ -132,9 +172,19 @@ class LoggerService : Service() {
         stateMachine?.transitionTo(MeasurementState.STOPPING,"計測停止処理を開始します")
         val stoppedNs = SystemClock.elapsedRealtimeNanos()
         measurementTimeline?.markStopped(stoppedNs)
-        qualityMonitor?.finish(stoppedNs)
+        val qualitySummary = qualityMonitor?.finish(stoppedNs)
+        val measurementSummary = if (qualitySummary != null) {
+            measurementTimeline?.summary(qualitySummary)
+        } else null
         val i=imuCollector?.snapshot();val g=gnssCollector?.snapshot();val free=storageMonitor?.freeBytes()?:0L;storageMonitor?.close();storageMonitor=null
-        runCatching{environmentCollector?.close();environmentCollector=null;gnssCollector?.close();gnssCollector=null;imuCollector?.close();imuCollector=null;val s=session;if(s!=null&&i!=null&&g!=null)s.complete(SessionSummary(i.accelerometer.toSummary(),i.gyroscope.toSummary(),GnssSummary(g.count,g.meanRateHz,g.maximumIntervalMs),dirBytes(s.directory),free))}.onFailure{e->runCatching{session?.fail("計測の終了処理に失敗しました: ${e.message}")}}
+        runCatching{environmentCollector?.close();environmentCollector=null;gnssCollector?.close();gnssCollector=null;imuCollector?.close();imuCollector=null;val s=session;if(s!=null&&i!=null&&g!=null)s.complete(SessionSummary(
+                i.accelerometer.toSummary(),
+                i.gyroscope.toSummary(),
+                GnssSummary(g.count, g.meanRateHz, g.maximumIntervalMs),
+                dirBytes(s.directory),
+                free,
+                requireNotNull(measurementSummary) { "計測状態統計を確定できませんでした" }
+            ))}.onFailure{e->runCatching{session?.fail("計測の終了処理に失敗しました: ${e.message}")}}
         stateMachine?.transitionTo(MeasurementState.IDLE,"計測停止処理が完了しました");runCatching{session?.close()};session=null
         stateMachine=null
         readinessEvaluator=null
@@ -150,5 +200,5 @@ class LoggerService : Service() {
     private fun updateNotification(s:MeasurementState){getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID,notification(when(s){MeasurementState.WAITING_FOR_GNSS->"GNSS準備待ち";MeasurementState.READY->"GNSS準備完了: 走行可能";MeasurementState.DEGRADED->"GNSS品質低下: IMU記録継続中";else->s.name}))}
     private fun notification(text:String)=NotificationCompat.Builder(this,CHANNEL_ID).setSmallIcon(android.R.drawable.ic_menu_mylocation).setContentTitle("GNSS・IMU計測中").setContentText(text).setOngoing(true).build()
     private fun createChannel(){getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID,"計測状態",NotificationManager.IMPORTANCE_LOW))}
-    override fun onDestroy(){if(running.get())stopLogging();super.onDestroy()};override fun onBind(i:Intent?):IBinder=Binder()
+    override fun onDestroy(){if(running.get())stopLogging();super.onDestroy()};override fun onBind(intent: Intent?): IBinder = localBinder
 }

@@ -1,0 +1,21 @@
+package com.example.gnss_imu_logger.measurement
+
+/**
+ * 画面へ通知する現在の計測状態。
+ * 入力: サービス内の最新状態
+ * 出力: 状態表示、GNSS品質表示、IMU周期表示
+ */
+data class MeasurementSnapshot(
+    val state: MeasurementState = MeasurementState.IDLE,
+    val reason: ReadinessReason = ReadinessReason.NONE,
+    val usedSatellites: Int = 0,
+    val horizontalAccuracyM: Float? = null,
+    val lastLocationAgeMs: Long? = null,
+    val accelerometerRateHz: Double = 0.0,
+    val gyroscopeRateHz: Double = 0.0,
+    val sessionElapsedMs: Long = 0L
+)
+
+fun interface MeasurementStateListener {
+    fun onSnapshotChanged(snapshot: MeasurementSnapshot)
+}
