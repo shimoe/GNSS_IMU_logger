@@ -54,6 +54,8 @@ class SessionContext(context: Context, val mode: LogMode) : Closeable {
         event(EventLevel.INFO, EventType.SESSION_CREATED, "計測セッションを作成しました")
     }
 
+    fun file(name: String): File = File(directory, name)
+
     fun event(level: EventLevel, type: EventType, message: String) {
         val elapsedNs = SystemClock.elapsedRealtimeNanos()
         events.write(
