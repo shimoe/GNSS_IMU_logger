@@ -4,9 +4,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.location.LocationManager
 import android.os.Binder
@@ -19,28 +16,27 @@ import com.example.gnss_imu_logger.log.SessionContext
 import com.example.gnss_imu_logger.model.EventLevel
 import com.example.gnss_imu_logger.model.EventType
 import com.example.gnss_imu_logger.model.LogMode
+import com.example.gnss_imu_logger.sensor.EnvironmentCollector
 import com.example.gnss_imu_logger.sensor.GnssCollector
 import com.example.gnss_imu_logger.sensor.ImuCollector
 import java.util.concurrent.atomic.AtomicBoolean
 
-class LoggerService : Service(), SensorEventListener {
+class LoggerService : Service() {
     companion object {
         const val ACTION_START = "logger.START"
         const val ACTION_STOP = "logger.STOP"
         private const val CHANNEL_ID = "measurement"
         private const val NOTIFICATION_ID = 1001
-        private const val SENSOR_PERIOD_US = 5_000
-        private const val SENSOR_LATENCY_US = 100_000
     }
 
     private lateinit var sensorManager: SensorManager
     private lateinit var locationManager: LocationManager
-    private lateinit var legacyWriter: LogWriter
     private val mainHandler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
     private var session: SessionContext? = null
     private var imuCollector: ImuCollector? = null
     private var gnssCollector: GnssCollector? = null
+    private var environmentCollector: EnvironmentCollector? = null
     private val running = AtomicBoolean(false)
     private val stopping = AtomicBoolean(false)
 
@@ -71,61 +67,34 @@ class LoggerService : Service(), SensorEventListener {
                 EventType.SERVICE_STARTED,
                 "計測サービスを開始しました"
             )
-
-            legacyWriter = LogWriter(this)
-            legacyWriter.writeSensorInfo(sensorManager.getSensorList(Sensor.TYPE_ALL))
             acquireWakeLock()
 
             imuCollector = ImuCollector(
                 sensorManager,
-                currentSession
-            ) { message, error ->
-                mainHandler.post { handleFatalError(message, error) }
-            }.also { it.start() }
+                currentSession,
+                ::postFatalError
+            ).also { it.start() }
 
             gnssCollector = GnssCollector(
                 this,
                 locationManager,
-                currentSession
-            ) { message, error ->
-                mainHandler.post { handleFatalError(message, error) }
-            }.also { it.start() }
+                currentSession,
+                ::postFatalError
+            ).also { it.start() }
 
-            // 環境センサーは第4分割まで旧CSVへ保存する。
-            registerLegacySensor(Sensor.TYPE_ACCELEROMETER)
-            registerLegacySensor(Sensor.TYPE_GYROSCOPE)
-            registerLegacySensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
-            registerLegacySensor(Sensor.TYPE_MAGNETIC_FIELD_UNCALIBRATED, 10_000)
-            registerLegacySensor(Sensor.TYPE_PRESSURE, 40_000)
+            environmentCollector = EnvironmentCollector(
+                sensorManager,
+                currentSession,
+                ::postFatalError
+            ).also { it.start() }
         } catch (error: Throwable) {
             handleFatalError("計測を開始できませんでした", error)
         }
     }
 
-    private fun registerLegacySensor(type: Int, periodUs: Int = SENSOR_PERIOD_US) {
-        sensorManager.getDefaultSensor(type)?.let { sensor ->
-            val registered = sensorManager.registerListener(
-                this,
-                sensor,
-                periodUs,
-                SENSOR_LATENCY_US
-            )
-            if (!registered) {
-                throw IllegalStateException("${sensor.name}を登録できませんでした")
-            }
-        }
+    private fun postFatalError(message: String, error: Throwable?) {
+        mainHandler.post { handleFatalError(message, error) }
     }
-
-    override fun onSensorChanged(event: SensorEvent) {
-        legacyWriter.sensor(
-            event.sensor.type,
-            event.timestamp,
-            event.accuracy,
-            event.values
-        )
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
     private fun stopLogging() {
         if (!running.compareAndSet(true, false)) {
@@ -140,12 +109,12 @@ class LoggerService : Service(), SensorEventListener {
                 EventType.STOP_REQUESTED,
                 "計測停止を受け付けました"
             )
-            sensorManager.unregisterListener(this)
+            environmentCollector?.close()
+            environmentCollector = null
             gnssCollector?.close()
             gnssCollector = null
             imuCollector?.close()
             imuCollector = null
-            if (::legacyWriter.isInitialized) legacyWriter.close()
             session?.complete()
         }.onFailure { error ->
             runCatching {

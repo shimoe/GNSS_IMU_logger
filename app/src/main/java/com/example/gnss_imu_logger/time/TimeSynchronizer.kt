@@ -13,25 +13,42 @@ class TimeSynchronizer(
     val startUtcNs: Long = System.currentTimeMillis() * NS_PER_MS
 ) {
     val initialUtcOffsetNs: Long = startUtcNs - startElapsedNs
-    private var lastUtcOffsetNs: Long = initialUtcOffsetNs
+    private var activeUtcOffsetNs: Long = initialUtcOffsetNs
+    private var lastGnssUtcOffsetNs: Long? = null
 
     fun sessionElapsedNs(elapsedRealtimeNs: Long): Long =
         elapsedRealtimeNs - startElapsedNs
 
+    @Synchronized
     fun estimateUtcNs(elapsedRealtimeNs: Long): Long =
-        elapsedRealtimeNs + lastUtcOffsetNs
+        elapsedRealtimeNs + activeUtcOffsetNs
 
-    fun updateUtcOffset(elapsedRealtimeNs: Long, utcMs: Long): OffsetUpdate {
-        val newOffsetNs = utcMs * NS_PER_MS - elapsedRealtimeNs
-        val changed = abs(newOffsetNs - lastUtcOffsetNs) >= UTC_CHANGE_THRESHOLD_NS
-        val previousOffsetNs = lastUtcOffsetNs
-        lastUtcOffsetNs = newOffsetNs
-        return OffsetUpdate(changed, previousOffsetNs, newOffsetNs)
+    /**
+     * GNSS位置時刻からUTCオフセットを更新する。
+     * 初回GNSS受信は比較対象がないため、変更警告を出さず初期化だけ行う。
+     */
+    @Synchronized
+    fun updateGnssUtcOffset(elapsedRealtimeNs: Long, utcMs: Long): OffsetUpdate {
+        val currentOffsetNs = utcMs * NS_PER_MS - elapsedRealtimeNs
+        val previousOffsetNs = lastGnssUtcOffsetNs
+        val initialized = previousOffsetNs == null
+        val changed = previousOffsetNs != null &&
+            abs(currentOffsetNs - previousOffsetNs) >= UTC_CHANGE_THRESHOLD_NS
+
+        lastGnssUtcOffsetNs = currentOffsetNs
+        activeUtcOffsetNs = currentOffsetNs
+        return OffsetUpdate(
+            initialized = initialized,
+            changed = changed,
+            previousOffsetNs = previousOffsetNs,
+            currentOffsetNs = currentOffsetNs
+        )
     }
 
     data class OffsetUpdate(
+        val initialized: Boolean,
         val changed: Boolean,
-        val previousOffsetNs: Long,
+        val previousOffsetNs: Long?,
         val currentOffsetNs: Long
     )
 

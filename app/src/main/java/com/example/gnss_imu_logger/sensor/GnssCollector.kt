@@ -151,7 +151,7 @@ class GnssCollector(
     override fun onLocationChanged(location: Location) {
         try {
             val elapsedNs = location.elapsedRealtimeNanos
-            val offset = session.time.updateUtcOffset(elapsedNs, location.time)
+            val offset = session.time.updateGnssUtcOffset(elapsedNs, location.time)
             if (offset.changed) {
                 session.event(
                     EventLevel.WARNING,
