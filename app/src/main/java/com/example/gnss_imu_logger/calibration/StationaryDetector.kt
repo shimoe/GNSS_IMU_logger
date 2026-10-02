@@ -11,7 +11,12 @@ import kotlin.math.sqrt
 class StationaryDetector {
     private val accelerationSamples = ArrayDeque<ScalarSample>()
     private val gyroscopeSamples = ArrayDeque<ScalarSample>()
+
+    private var stationary = false
     private var stationaryCandidateStartedNs: Long? = null
+    private var motionCandidateStartedNs: Long? = null
+    private var stationaryStartedNs: Long? = null
+    private var lastStatus = StationaryStatus.waiting()
 
     @Synchronized
     fun addAccelerometer(
@@ -41,13 +46,21 @@ class StationaryDetector {
     fun reset() {
         accelerationSamples.clear()
         gyroscopeSamples.clear()
+        stationary = false
         stationaryCandidateStartedNs = null
+        motionCandidateStartedNs = null
+        stationaryStartedNs = null
+        lastStatus = StationaryStatus.waiting()
     }
 
     private fun evaluate(nowNs: Long): StationaryStatus {
         if (!hasFullWindow(nowNs)) {
-            stationaryCandidateStartedNs = null
-            return StationaryStatus.waiting()
+            // 一時的な窓不足だけでは、成立済みの静止状態を解除しない。
+            return lastStatus.copy(
+                stationary = stationary,
+                candidate = stationary,
+                durationMs = stationaryDurationMs(nowNs)
+            )
         }
 
         val accelerationMean = accelerationSamples.meanValue()
@@ -59,33 +72,72 @@ class StationaryDetector {
             accelerationMean - STANDARD_GRAVITY_MPS2
         )
 
-        val candidate =
-            accelerationError <= MAX_ACCELERATION_ERROR_MPS2 &&
-                accelerationStd <= MAX_ACCELERATION_STD_MPS2 &&
-                gyroscopeRms <= MAX_GYROSCOPE_RMS_RADPS
+        val stationaryCandidate =
+            accelerationError <= ENTER_ACCELERATION_ERROR_MPS2 &&
+                accelerationStd <= ENTER_ACCELERATION_STD_MPS2 &&
+                gyroscopeRms <= ENTER_GYROSCOPE_RMS_RADPS
 
-        if (candidate) {
-            if (stationaryCandidateStartedNs == null) {
-                stationaryCandidateStartedNs = nowNs
+        val motionCandidate =
+            accelerationError > EXIT_ACCELERATION_ERROR_MPS2 ||
+                accelerationStd > EXIT_ACCELERATION_STD_MPS2 ||
+                gyroscopeRms > EXIT_GYROSCOPE_RMS_RADPS
+
+        if (!stationary) {
+            motionCandidateStartedNs = null
+            if (stationaryCandidate) {
+                if (stationaryCandidateStartedNs == null) {
+                    stationaryCandidateStartedNs = nowNs
+                }
+                if (
+                    nowNs - requireNotNull(stationaryCandidateStartedNs) >=
+                    ENTER_DURATION_NS
+                ) {
+                    stationary = true
+                    stationaryStartedNs = nowNs
+                    stationaryCandidateStartedNs = null
+                }
+            } else {
+                stationaryCandidateStartedNs = null
             }
         } else {
             stationaryCandidateStartedNs = null
+            if (motionCandidate) {
+                if (motionCandidateStartedNs == null) {
+                    motionCandidateStartedNs = nowNs
+                }
+                if (
+                    nowNs - requireNotNull(motionCandidateStartedNs) >=
+                    EXIT_DURATION_NS
+                ) {
+                    stationary = false
+                    stationaryStartedNs = null
+                    motionCandidateStartedNs = null
+                }
+            } else {
+                motionCandidateStartedNs = null
+            }
         }
 
-        val durationNs = stationaryCandidateStartedNs?.let {
-            nowNs - it
-        } ?: 0L
-
-        return StationaryStatus(
-            stationary = candidate &&
-                durationNs >= REQUIRED_STATIONARY_DURATION_NS,
-            candidate = candidate,
-            durationMs = durationNs / NS_PER_MS,
+        val status = StationaryStatus(
+            stationary = stationary,
+            candidate = stationary || stationaryCandidate,
+            durationMs = if (stationary) {
+                stationaryDurationMs(nowNs)
+            } else {
+                stationaryCandidateStartedNs?.let {
+                    (nowNs - it) / NS_PER_MS
+                } ?: 0L
+            },
             accelerationNormMps2 = accelerationMean,
             accelerationErrorMps2 = accelerationError,
             gyroscopeNormRadps = gyroscopeRms
         )
+        lastStatus = status
+        return status
     }
+
+    private fun stationaryDurationMs(nowNs: Long): Long =
+        stationaryStartedNs?.let { (nowNs - it) / NS_PER_MS } ?: 0L
 
     private fun hasFullWindow(nowNs: Long): Boolean {
         val firstAccelerationNs = accelerationSamples.firstOrNull()?.timestampNs
@@ -145,16 +197,22 @@ class StationaryDetector {
     companion object {
         private const val STANDARD_GRAVITY_MPS2 = 9.80665
 
-        // 約0.5秒の窓で単発ノイズによる判定解除を防ぐ。
         private const val EVALUATION_WINDOW_NS = 500_000_000L
         private const val RETENTION_DURATION_NS = 600_000_000L
         private const val MINIMUM_WINDOW_SAMPLES = 50
 
-        private const val MAX_ACCELERATION_ERROR_MPS2 = 0.35
-        private const val MAX_ACCELERATION_STD_MPS2 = 0.12
-        private const val MAX_GYROSCOPE_RMS_RADPS = 0.05
+        // 静止成立条件
+        private const val ENTER_ACCELERATION_ERROR_MPS2 = 0.35
+        private const val ENTER_ACCELERATION_STD_MPS2 = 0.12
+        private const val ENTER_GYROSCOPE_RMS_RADPS = 0.05
+        private const val ENTER_DURATION_NS = 2_000_000_000L
 
-        private const val REQUIRED_STATIONARY_DURATION_NS = 2_000_000_000L
+        // 静止解除条件。成立条件より広い範囲を許容して判定の往復を防ぐ。
+        private const val EXIT_ACCELERATION_ERROR_MPS2 = 0.60
+        private const val EXIT_ACCELERATION_STD_MPS2 = 0.20
+        private const val EXIT_GYROSCOPE_RMS_RADPS = 0.08
+        private const val EXIT_DURATION_NS = 300_000_000L
+
         private const val NS_PER_MS = 1_000_000L
     }
 }
