@@ -11,6 +11,7 @@ import com.example.gnss_imu_logger.calibration.ImuCalibration
 import com.example.gnss_imu_logger.calibration.InitialCalibration
 import com.example.gnss_imu_logger.calibration.StationaryDetector
 import com.example.gnss_imu_logger.calibration.StationaryStatus
+import com.example.gnss_imu_logger.log.CorrectedGyroscopeWriter
 import com.example.gnss_imu_logger.log.SessionContext
 import com.example.gnss_imu_logger.measurement.*
 import com.example.gnss_imu_logger.model.*
@@ -44,6 +45,7 @@ class LoggerService : Service() {
     private var imuCalibration: ImuCalibration? = null
     @Volatile
     private var correctedGyroscopeNormRadps: Double? = null
+    private var correctedGyroscopeWriter: CorrectedGyroscopeWriter? = null
     private val stateListeners = mutableSetOf<MeasurementStateListener>()
     @Volatile
     private var latestSnapshot = MeasurementSnapshot()
@@ -94,6 +96,17 @@ class LoggerService : Service() {
             initialCalibration=InitialCalibration()
             imuCalibration=null
             correctedGyroscopeNormRadps=null
+            correctedGyroscopeWriter=null
+            latestLocationNs=null
+            latestAccuracyM=null
+            latestUsedSatellites=0
+            consecutiveLocationCount=0
+            if (mode == LogMode.DIAGNOSTIC) {
+                correctedGyroscopeWriter = CorrectedGyroscopeWriter(
+                    s.file("gyro_corrected.bin"),
+                    ::postFatalError
+                )
+            }
             s.event(EventLevel.INFO,EventType.SERVICE_STARTED,"計測サービスを開始しました")
             if(incomplete.isNotEmpty())s.event(EventLevel.WARNING,EventType.INCOMPLETE_SESSION_FOUND,"未完了セッションを${incomplete.size}件検出しました")
             acquireWakeLock();storageMonitor=StorageMonitor(s.directory,{b->s.event(EventLevel.WARNING,EventType.LOW_STORAGE,"保存先の空き容量が少なくなりました: $b bytes")},{b->s.event(EventLevel.ERROR,EventType.LOW_STORAGE,"保存先の空き容量が停止基準を下回りました: $b bytes");stopLogging()}).also{it.start()}
@@ -122,6 +135,17 @@ class LoggerService : Service() {
                                 corrected[1] * corrected[1] +
                                 corrected[2] * corrected[2]
                         ).toDouble()
+                        if (correctedGyroscopeWriter?.offer(
+                                timestampNs,
+                                corrected,
+                                android.hardware.SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+                            ) == false
+                        ) {
+                            postFatalError(
+                                "補正後ジャイロログの書き込み待ちデータが上限に達しました",
+                                null
+                            )
+                        }
                     }
                 }
             ).also { it.start() }
@@ -295,7 +319,7 @@ class LoggerService : Service() {
             measurementTimeline?.summary(qualitySummary)
         } else null
         val i=imuCollector?.snapshot();val g=gnssCollector?.snapshot();val free=storageMonitor?.freeBytes()?:0L;storageMonitor?.close();storageMonitor=null
-        runCatching{environmentCollector?.close();environmentCollector=null;gnssCollector?.close();gnssCollector=null;imuCollector?.close();imuCollector=null;val s=session;if(s!=null&&i!=null&&g!=null)s.complete(SessionSummary(
+        runCatching{correctedGyroscopeWriter?.close();correctedGyroscopeWriter=null;environmentCollector?.close();environmentCollector=null;gnssCollector?.close();gnssCollector=null;imuCollector?.close();imuCollector=null;val s=session;if(s!=null&&i!=null&&g!=null)s.complete(SessionSummary(
                 i.accelerometer.toSummary(),
                 i.gyroscope.toSummary(),
                 GnssSummary(g.count, g.meanRateHz, g.maximumIntervalMs),
@@ -315,6 +339,11 @@ class LoggerService : Service() {
         initialCalibration=null
         imuCalibration=null
         correctedGyroscopeNormRadps=null
+        correctedGyroscopeWriter=null
+        latestLocationNs=null
+        latestAccuracyM=null
+        latestUsedSatellites=0
+        consecutiveLocationCount=0
         wakeLock?.takeIf{it.isHeld}?.release();wakeLock=null;stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
     }
     private fun SensorStats.Snapshot.toSummary()=SensorSummary(receivedCount,writtenCount,droppedCount,estimatedMissingCount,meanRateHz,medianIntervalMs,maximumIntervalMs)
