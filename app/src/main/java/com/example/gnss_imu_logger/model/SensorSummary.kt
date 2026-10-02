@@ -1,5 +1,6 @@
 package com.example.gnss_imu_logger.model
 
+import com.example.gnss_imu_logger.calibration.CalibrationResult
 import com.example.gnss_imu_logger.measurement.MeasurementStateSummary
 
 /**
@@ -29,5 +30,6 @@ data class SessionSummary(
     val gnss: GnssSummary,
     val totalBytes: Long,
     val freeBytesAtEnd: Long,
-    val measurement: MeasurementStateSummary
+    val measurement: MeasurementStateSummary,
+    val calibration: CalibrationResult?
 )

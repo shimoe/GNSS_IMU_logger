@@ -1,5 +1,6 @@
 package com.example.gnss_imu_logger.log
 
+import com.example.gnss_imu_logger.calibration.CalibrationResult
 import com.example.gnss_imu_logger.model.SessionMetadata
 import com.example.gnss_imu_logger.model.SensorSummary
 import java.io.File
@@ -72,8 +73,38 @@ class SessionMetadataWriter(private val file: File) {
         appendLine("      \"gnss_lost_count\": ${summary.measurement.gnssLostCount},")
         appendLine("      \"total_ready_duration_ms\": ${summary.measurement.totalReadyDurationMs},")
         appendLine("      \"total_degraded_duration_ms\": ${summary.measurement.totalDegradedDurationMs}")
-        appendLine("    }")
+        appendLine("    },")
+        appendCalibration(summary.calibration)
         appendLine("  }")
+    }
+
+    private fun StringBuilder.appendCalibration(value: CalibrationResult?) {
+        if (value == null) {
+            appendLine("    \"calibration\": null")
+            return
+        }
+        appendLine("    \"calibration\": {")
+        appendLine("      \"started_elapsed_ns\": ${value.startedElapsedNs},")
+        appendLine("      \"completed_elapsed_ns\": ${value.completedElapsedNs},")
+        appendLine("      \"accelerometer_samples\": ${value.accelerometerSamples},")
+        appendLine("      \"gyroscope_samples\": ${value.gyroscopeSamples},")
+        appendVector("gravity_mps2", value.gravityMps2, true)
+        appendVector("gravity_std_mps2", value.gravityStdMps2, true)
+        appendVector("gyroscope_bias_radps", value.gyroscopeBiasRadps, true)
+        appendVector("gyroscope_std_radps", value.gyroscopeStdRadps, false)
+        appendLine("    }")
+    }
+
+    private fun StringBuilder.appendVector(
+        name: String,
+        value: com.example.gnss_imu_logger.calibration.Vector3,
+        trailingComma: Boolean
+    ) {
+        appendLine("      \"$name\": {")
+        appendLine("        \"x\": ${value.x},")
+        appendLine("        \"y\": ${value.y},")
+        appendLine("        \"z\": ${value.z}")
+        appendLine("      }${if (trailingComma) "," else ""}")
     }
 
     private fun StringBuilder.appendSensor(

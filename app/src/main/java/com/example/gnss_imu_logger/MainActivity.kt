@@ -127,6 +127,9 @@ private fun LoggerScreen(
         Text("静止継続: %.1f 秒".format(snapshot.stationaryDurationMs / 1_000.0))
         Text("加速度ノルム: ${snapshot.accelerationNormMps2?.let { "%.3f m/s²".format(it) } ?: "未取得"}")
         Text("角速度ノルム: ${snapshot.gyroscopeNormRadps?.let { "%.4f rad/s".format(it) } ?: "未取得"}")
+        Text("初期校正: ${when { snapshot.calibrationCompleted -> "完了"; snapshot.calibrationActive -> "収集中"; else -> "待機中" }}")
+        Text("校正収集: 加速度${snapshot.calibrationAccelerometerSamples}件 / ジャイロ${snapshot.calibrationGyroscopeSamples}件")
+        Text("校正時間: %.1f秒".format(snapshot.calibrationElapsedMs / 1_000.0))
         Text("計測時間: %02d:%02d".format(snapshot.sessionElapsedMs / 60_000, snapshot.sessionElapsedMs / 1_000 % 60))
 
         Row(verticalAlignment = Alignment.CenterVertically) {
