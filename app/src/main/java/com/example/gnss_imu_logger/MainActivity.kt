@@ -130,6 +130,9 @@ private fun LoggerScreen(
         Text("初期校正: ${when { snapshot.calibrationCompleted -> "完了"; snapshot.calibrationActive -> "収集中"; else -> "待機中" }}")
         Text("校正収集: 加速度${snapshot.calibrationAccelerometerSamples}件 / ジャイロ${snapshot.calibrationGyroscopeSamples}件")
         Text("校正時間: %.1f秒".format(snapshot.calibrationElapsedMs / 1_000.0))
+        Text("補正後角速度: ${snapshot.correctedGyroscopeNormRadps?.let { "%.5f rad/s".format(it) } ?: "未適用"}")
+        Text("初期ロール: ${snapshot.initialRollDeg?.let { "%.3f°".format(it) } ?: "未算出"}")
+        Text("初期ピッチ: ${snapshot.initialPitchDeg?.let { "%.3f°".format(it) } ?: "未算出"}")
         Text("計測時間: %02d:%02d".format(snapshot.sessionElapsedMs / 60_000, snapshot.sessionElapsedMs / 1_000 % 60))
 
         Row(verticalAlignment = Alignment.CenterVertically) {

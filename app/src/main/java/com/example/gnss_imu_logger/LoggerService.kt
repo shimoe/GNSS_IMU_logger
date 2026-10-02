@@ -7,6 +7,7 @@ import android.location.LocationManager
 import android.os.*
 import androidx.core.app.NotificationCompat
 import com.example.gnss_imu_logger.calibration.CalibrationEvent
+import com.example.gnss_imu_logger.calibration.ImuCalibration
 import com.example.gnss_imu_logger.calibration.InitialCalibration
 import com.example.gnss_imu_logger.calibration.StationaryDetector
 import com.example.gnss_imu_logger.calibration.StationaryStatus
@@ -39,6 +40,10 @@ class LoggerService : Service() {
     private var stationaryStatus = StationaryStatus.waiting()
     private var stationaryEventReported = false
     private var initialCalibration: InitialCalibration? = null
+    @Volatile
+    private var imuCalibration: ImuCalibration? = null
+    @Volatile
+    private var correctedGyroscopeNormRadps: Double? = null
     private val stateListeners = mutableSetOf<MeasurementStateListener>()
     @Volatile
     private var latestSnapshot = MeasurementSnapshot()
@@ -87,6 +92,8 @@ class LoggerService : Service() {
             stationaryStatus=StationaryStatus.waiting()
             stationaryEventReported=false
             initialCalibration=InitialCalibration()
+            imuCalibration=null
+            correctedGyroscopeNormRadps=null
             s.event(EventLevel.INFO,EventType.SERVICE_STARTED,"計測サービスを開始しました")
             if(incomplete.isNotEmpty())s.event(EventLevel.WARNING,EventType.INCOMPLETE_SESSION_FOUND,"未完了セッションを${incomplete.size}件検出しました")
             acquireWakeLock();storageMonitor=StorageMonitor(s.directory,{b->s.event(EventLevel.WARNING,EventType.LOW_STORAGE,"保存先の空き容量が少なくなりました: $b bytes")},{b->s.event(EventLevel.ERROR,EventType.LOW_STORAGE,"保存先の空き容量が停止基準を下回りました: $b bytes");stopLogging()}).also{it.start()}
@@ -109,6 +116,13 @@ class LoggerService : Service() {
                     handleCalibrationEvent(
                         initialCalibration?.addGyroscope(timestampNs, values)
                     )
+                    imuCalibration?.correctGyroscope(values)?.let { corrected ->
+                        correctedGyroscopeNormRadps = kotlin.math.sqrt(
+                            corrected[0] * corrected[0] +
+                                corrected[1] * corrected[1] +
+                                corrected[2] * corrected[2]
+                        ).toDouble()
+                    }
                 }
             ).also { it.start() }
             gnssCollector=GnssCollector(this,locationManager,s,::postFatalError){t,u,a,c->latestLocationNs=t;latestUsedSatellites=u;latestAccuracyM=a;consecutiveLocationCount=c}.also{it.start()}
@@ -163,6 +177,14 @@ class LoggerService : Service() {
                     "初期校正が完了しました: 加速度${result?.accelerometerSamples ?: 0}件、" +
                         "ジャイロ${result?.gyroscopeSamples ?: 0}件"
                 )
+                if (result != null) {
+                    imuCalibration = ImuCalibration.from(result)
+                    session?.event(
+                        EventLevel.INFO,
+                        EventType.CALIBRATION_APPLIED,
+                        "ジャイロバイアス補正と初期姿勢を有効にしました"
+                    )
+                }
             }
             null -> Unit
         }
@@ -221,7 +243,10 @@ class LoggerService : Service() {
                 calibrationCompleted = initialCalibration?.snapshot()?.completed ?: false,
                 calibrationElapsedMs = initialCalibration?.snapshot()?.elapsedMs ?: 0L,
                 calibrationAccelerometerSamples = initialCalibration?.snapshot()?.accelerometerSamples ?: 0,
-                calibrationGyroscopeSamples = initialCalibration?.snapshot()?.gyroscopeSamples ?: 0
+                calibrationGyroscopeSamples = initialCalibration?.snapshot()?.gyroscopeSamples ?: 0,
+                correctedGyroscopeNormRadps = correctedGyroscopeNormRadps,
+                initialRollDeg = imuCalibration?.initialRollRad?.let { Math.toDegrees(it) },
+                initialPitchDeg = imuCalibration?.initialPitchRad?.let { Math.toDegrees(it) }
             )
         )
 
@@ -288,6 +313,8 @@ class LoggerService : Service() {
         stationaryStatus=StationaryStatus.waiting()
         stationaryEventReported=false
         initialCalibration=null
+        imuCalibration=null
+        correctedGyroscopeNormRadps=null
         wakeLock?.takeIf{it.isHeld}?.release();wakeLock=null;stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
     }
     private fun SensorStats.Snapshot.toSummary()=SensorSummary(receivedCount,writtenCount,droppedCount,estimatedMissingCount,meanRateHz,medianIntervalMs,maximumIntervalMs)
