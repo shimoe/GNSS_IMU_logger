@@ -43,10 +43,7 @@ class LoggerService : Service() {
             startForeground(NOTIFICATION_ID,notification("センサーを初期化しています"))
             val docs=File(getExternalFilesDir(null),"Documents").apply{mkdirs()};val incomplete=IncompleteSessionScanner.scan(docs)
             val s=SessionContext(this,mode);session=s;stateMachine=MeasurementStateMachine(s){updateNotification(it)}
-            stateMachine?.transitionTo(MeasurementState.INITIALIZING,"計測開始操作を受け付けました")
-            readinessEvaluator=ReadinessEvaluator()
-            qualityMonitor=GnssQualityMonitor()
-            measurementTimeline=MeasurementTimeline()
+            stateMachine?.transitionTo(MeasurementState.INITIALIZING,"計測開始操作を受け付けました");readinessEvaluator=ReadinessEvaluator()
             s.event(EventLevel.INFO,EventType.SERVICE_STARTED,"計測サービスを開始しました")
             if(incomplete.isNotEmpty())s.event(EventLevel.WARNING,EventType.INCOMPLETE_SESSION_FOUND,"未完了セッションを${incomplete.size}件検出しました")
             acquireWakeLock();storageMonitor=StorageMonitor(s.directory,{b->s.event(EventLevel.WARNING,EventType.LOW_STORAGE,"保存先の空き容量が少なくなりました: $b bytes")},{b->s.event(EventLevel.ERROR,EventType.LOW_STORAGE,"保存先の空き容量が停止基準を下回りました: $b bytes");stopLogging()}).also{it.start()}
@@ -57,90 +54,23 @@ class LoggerService : Service() {
             readinessCheckRunning=true;mainHandler.post(readinessCheck)
         }catch(e:Throwable){handleFatalError("計測を開始できませんでした",e)}
     }
-    private fun evaluateReadiness() {
-        val machine = stateMachine ?: return
-        if (machine.state !in setOf(
-                MeasurementState.WAITING_FOR_GNSS,
-                MeasurementState.READY,
-                MeasurementState.DEGRADED
-            )
-        ) return
-
-        val imu = imuCollector?.snapshot() ?: return
-        val quality = qualityMonitor ?: return
-        val nowNs = SystemClock.elapsedRealtimeNanos()
-
-        quality.evaluateLocationAge(nowNs, latestLocationNs).forEach { event ->
-            if (event == GnssQualityEvent.LOST) {
-                session?.event(
-                    EventLevel.WARNING,
-                    EventType.GNSS_LOST,
-                    "GNSS位置を3秒以上受信できませんでした"
-                )
-            }
-        }
-
-        val status = readinessEvaluator?.evaluate(
-            nowNs,
-            imu.accelerometer.receivedCount,
-            imu.gyroscope.receivedCount,
-            imu.accelerometer.droppedCount + imu.gyroscope.droppedCount,
-            consecutiveLocationCount,
-            latestUsedSatellites,
-            latestAccuracyM,
-            latestLocationNs,
-            true
-        ) ?: return
-
-        when {
-            status.ready && machine.state == MeasurementState.WAITING_FOR_GNSS -> {
-                if (machine.transitionTo(MeasurementState.READY, readyMessage(status))) {
-                    quality.onReady(nowNs, recovered = false)
-                    measurementTimeline?.markReady(nowNs)
-                }
-            }
-
-            status.ready && machine.state == MeasurementState.DEGRADED -> {
-                if (machine.transitionTo(MeasurementState.READY, readyMessage(status))) {
-                    quality.onReady(nowNs, recovered = true)
-                    measurementTimeline?.markReady(nowNs)
-                    session?.event(
-                        EventLevel.INFO,
-                        EventType.GNSS_RECOVERED,
-                        "GNSS位置の受信が安定しました"
-                    )
-                }
-            }
-
-            !status.ready && machine.state == MeasurementState.READY -> {
-                if (machine.transitionTo(
-                        MeasurementState.DEGRADED,
-                        "GNSS品質が低下しました: ${status.reason.name}"
-                    )
-                ) {
-                    quality.onDegraded(nowNs)
-                }
-            }
+    private fun evaluateReadiness(){
+        val m=stateMachine?:return;if(m.state !in setOf(MeasurementState.WAITING_FOR_GNSS,MeasurementState.READY,MeasurementState.DEGRADED))return
+        val imu=imuCollector?.snapshot()?:return;val now=SystemClock.elapsedRealtimeNanos()
+        val r=readinessEvaluator?.evaluate(now,imu.accelerometer.receivedCount,imu.gyroscope.receivedCount,imu.accelerometer.droppedCount+imu.gyroscope.droppedCount,consecutiveLocationCount,latestUsedSatellites,latestAccuracyM,latestLocationNs,true)?:return
+        when{
+            r.ready&&m.state==MeasurementState.WAITING_FOR_GNSS->m.transitionTo(MeasurementState.READY,readyMessage(r))
+            r.ready&&m.state==MeasurementState.DEGRADED->{session?.event(EventLevel.INFO,EventType.GNSS_RECOVERED,"GNSS位置の受信が安定しました");m.transitionTo(MeasurementState.READY,readyMessage(r))}
+            !r.ready&&m.state==MeasurementState.READY->m.transitionTo(MeasurementState.DEGRADED,"GNSS品質が低下しました: ${r.reason.name}")
         }
     }
-
     private fun readyMessage(r:ReadinessStatus)="GNSS準備条件が成立しました: 使用衛星${r.usedSatellites}、水平精度${r.horizontalAccuracyM} m、連続位置${r.locationCount}回"
     private fun stopLogging(){
         if(!running.compareAndSet(true,false)){stopSelf();return};if(!stopping.compareAndSet(false,true))return
-        readinessCheckRunning=false
-        mainHandler.removeCallbacks(readinessCheck)
-        stateMachine?.transitionTo(MeasurementState.STOPPING,"計測停止処理を開始します")
-        val stoppedNs = SystemClock.elapsedRealtimeNanos()
-        measurementTimeline?.markStopped(stoppedNs)
-        qualityMonitor?.finish(stoppedNs)
+        readinessCheckRunning=false;mainHandler.removeCallbacks(readinessCheck);stateMachine?.transitionTo(MeasurementState.STOPPING,"計測停止処理を開始します")
         val i=imuCollector?.snapshot();val g=gnssCollector?.snapshot();val free=storageMonitor?.freeBytes()?:0L;storageMonitor?.close();storageMonitor=null
         runCatching{environmentCollector?.close();environmentCollector=null;gnssCollector?.close();gnssCollector=null;imuCollector?.close();imuCollector=null;val s=session;if(s!=null&&i!=null&&g!=null)s.complete(SessionSummary(i.accelerometer.toSummary(),i.gyroscope.toSummary(),GnssSummary(g.count,g.meanRateHz,g.maximumIntervalMs),dirBytes(s.directory),free))}.onFailure{e->runCatching{session?.fail("計測の終了処理に失敗しました: ${e.message}")}}
-        stateMachine?.transitionTo(MeasurementState.IDLE,"計測停止処理が完了しました");runCatching{session?.close()};session=null
-        stateMachine=null
-        readinessEvaluator=null
-        qualityMonitor=null
-        measurementTimeline=null
-        wakeLock?.takeIf{it.isHeld}?.release();wakeLock=null;stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
+        stateMachine?.transitionTo(MeasurementState.IDLE,"計測停止処理が完了しました");runCatching{session?.close()};session=null;stateMachine=null;readinessEvaluator=null;wakeLock?.takeIf{it.isHeld}?.release();wakeLock=null;stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
     }
     private fun SensorStats.Snapshot.toSummary()=SensorSummary(receivedCount,writtenCount,droppedCount,estimatedMissingCount,meanRateHz,medianIntervalMs,maximumIntervalMs)
     private fun dirBytes(d:File)=d.walkTopDown().filter{it.isFile}.sumOf{it.length()}
