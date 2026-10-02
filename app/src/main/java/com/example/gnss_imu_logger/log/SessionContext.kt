@@ -9,6 +9,7 @@ import com.example.gnss_imu_logger.model.LogMode
 import com.example.gnss_imu_logger.model.SessionEvent
 import com.example.gnss_imu_logger.model.SessionMetadata
 import com.example.gnss_imu_logger.model.SessionStatus
+import com.example.gnss_imu_logger.model.SessionSummary
 import com.example.gnss_imu_logger.time.TimeSynchronizer
 import java.io.Closeable
 import java.io.File
@@ -70,14 +71,15 @@ class SessionContext(context: Context, val mode: LogMode) : Closeable {
         )
     }
 
-    fun complete() {
+    fun complete(summary: SessionSummary) {
         val endElapsedNs = SystemClock.elapsedRealtimeNanos()
         event(EventLevel.INFO, EventType.SESSION_COMPLETED, "計測セッションを正常終了しました")
         events.flush()
         metadata = metadata.copy(
             status = SessionStatus.COMPLETED,
             endElapsedNs = endElapsedNs,
-            endUtcNs = time.estimateUtcNs(endElapsedNs)
+            endUtcNs = time.estimateUtcNs(endElapsedNs),
+            summary = summary
         )
         metadataWriter.write(metadata)
         if (!incompleteFile.delete() && incompleteFile.exists()) {

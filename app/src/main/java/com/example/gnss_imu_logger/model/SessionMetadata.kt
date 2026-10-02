@@ -19,5 +19,6 @@ data class SessionMetadata(
     val initialUtcOffsetNs: Long,
     val endElapsedNs: Long? = null,
     val endUtcNs: Long? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val summary: SessionSummary? = null
 )

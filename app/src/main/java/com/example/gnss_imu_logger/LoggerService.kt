@@ -15,16 +15,23 @@ import androidx.core.app.NotificationCompat
 import com.example.gnss_imu_logger.log.SessionContext
 import com.example.gnss_imu_logger.model.EventLevel
 import com.example.gnss_imu_logger.model.EventType
+import com.example.gnss_imu_logger.model.GnssSummary
 import com.example.gnss_imu_logger.model.LogMode
+import com.example.gnss_imu_logger.model.SensorSummary
+import com.example.gnss_imu_logger.model.SessionSummary
 import com.example.gnss_imu_logger.sensor.EnvironmentCollector
 import com.example.gnss_imu_logger.sensor.GnssCollector
 import com.example.gnss_imu_logger.sensor.ImuCollector
+import com.example.gnss_imu_logger.storage.IncompleteSessionScanner
+import com.example.gnss_imu_logger.storage.StorageMonitor
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 class LoggerService : Service() {
     companion object {
         const val ACTION_START = "logger.START"
         const val ACTION_STOP = "logger.STOP"
+        const val EXTRA_LOG_MODE = "logger.LOG_MODE"
         private const val CHANNEL_ID = "measurement"
         private const val NOTIFICATION_ID = 1001
     }
@@ -37,6 +44,7 @@ class LoggerService : Service() {
     private var imuCollector: ImuCollector? = null
     private var gnssCollector: GnssCollector? = null
     private var environmentCollector: EnvironmentCollector? = null
+    private var storageMonitor: StorageMonitor? = null
     private val running = AtomicBoolean(false)
     private val stopping = AtomicBoolean(false)
 
@@ -49,39 +57,66 @@ class LoggerService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startLogging()
+            ACTION_START -> startLogging(parseMode(intent))
             ACTION_STOP -> stopLogging()
         }
         return START_NOT_STICKY
     }
 
-    private fun startLogging() {
+    private fun parseMode(intent: Intent): LogMode = runCatching {
+        LogMode.valueOf(intent.getStringExtra(EXTRA_LOG_MODE) ?: LogMode.NORMAL.name)
+    }.getOrDefault(LogMode.NORMAL)
+
+    private fun startLogging(mode: LogMode) {
         if (!running.compareAndSet(false, true)) return
         stopping.set(false)
         try {
             startForeground(NOTIFICATION_ID, createNotification())
-            val currentSession = SessionContext(this, LogMode.DIAGNOSTIC)
+            val documents = File(getExternalFilesDir(null), "Documents").apply { mkdirs() }
+            val incomplete = IncompleteSessionScanner.scan(documents)
+            val currentSession = SessionContext(this, mode)
             session = currentSession
             currentSession.event(
                 EventLevel.INFO,
                 EventType.SERVICE_STARTED,
                 "計測サービスを開始しました"
             )
+            if (incomplete.isNotEmpty()) {
+                currentSession.event(
+                    EventLevel.WARNING,
+                    EventType.INCOMPLETE_SESSION_FOUND,
+                    "未完了セッションを${incomplete.size}件検出しました"
+                )
+            }
             acquireWakeLock()
 
-            imuCollector = ImuCollector(
-                sensorManager,
-                currentSession,
-                ::postFatalError
+            storageMonitor = StorageMonitor(
+                currentSession.directory,
+                onWarning = { bytes ->
+                    currentSession.event(
+                        EventLevel.WARNING,
+                        EventType.LOW_STORAGE,
+                        "保存先の空き容量が少なくなりました: $bytes bytes"
+                    )
+                },
+                onCritical = { bytes ->
+                    currentSession.event(
+                        EventLevel.ERROR,
+                        EventType.LOW_STORAGE,
+                        "保存先の空き容量が停止基準を下回りました: $bytes bytes"
+                    )
+                    stopLogging()
+                }
             ).also { it.start() }
 
+            imuCollector = ImuCollector(sensorManager, currentSession, ::postFatalError)
+                .also { it.start() }
             gnssCollector = GnssCollector(
                 this,
                 locationManager,
                 currentSession,
                 ::postFatalError
             ).also { it.start() }
-
             environmentCollector = EnvironmentCollector(
                 sensorManager,
                 currentSession,
@@ -103,23 +138,38 @@ class LoggerService : Service() {
         }
         if (!stopping.compareAndSet(false, true)) return
 
+        val imuStats = imuCollector?.snapshot()
+        val gnssStats = gnssCollector?.snapshot()
+        val freeBytes = storageMonitor?.freeBytes() ?: 0L
+        storageMonitor?.close()
+        storageMonitor = null
+
         runCatching {
-            session?.event(
-                EventLevel.INFO,
-                EventType.STOP_REQUESTED,
-                "計測停止を受け付けました"
-            )
+            session?.event(EventLevel.INFO, EventType.STOP_REQUESTED, "計測停止を受け付けました")
             environmentCollector?.close()
             environmentCollector = null
             gnssCollector?.close()
             gnssCollector = null
             imuCollector?.close()
             imuCollector = null
-            session?.complete()
-        }.onFailure { error ->
-            runCatching {
-                session?.fail("計測の終了処理に失敗しました: ${error.message}")
+            val currentSession = session
+            if (currentSession != null && imuStats != null && gnssStats != null) {
+                currentSession.complete(
+                    SessionSummary(
+                        accelerometer = imuStats.accelerometer.toSummary(),
+                        gyroscope = imuStats.gyroscope.toSummary(),
+                        gnss = GnssSummary(
+                            gnssStats.count,
+                            gnssStats.meanRateHz,
+                            gnssStats.maximumIntervalMs
+                        ),
+                        totalBytes = directoryBytes(currentSession.directory),
+                        freeBytesAtEnd = freeBytes
+                    )
+                )
             }
+        }.onFailure { error ->
+            runCatching { session?.fail("計測の終了処理に失敗しました: ${error.message}") }
         }
 
         runCatching { session?.close() }
@@ -130,11 +180,24 @@ class LoggerService : Service() {
         stopSelf()
     }
 
+    private fun com.example.gnss_imu_logger.sensor.SensorStats.Snapshot.toSummary() =
+        SensorSummary(
+            receivedCount,
+            writtenCount,
+            droppedCount,
+            estimatedMissingCount,
+            meanRateHz,
+            medianIntervalMs,
+            maximumIntervalMs
+        )
+
+    private fun directoryBytes(directory: File): Long =
+        directory.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
     private fun handleFatalError(message: String, error: Throwable?) {
         if (stopping.get()) return
         val detail = error?.message?.takeIf { it.isNotBlank() }
-        val fullMessage = if (detail == null) message else "$message: $detail"
-        runCatching { session?.fail(fullMessage) }
+        runCatching { session?.fail(if (detail == null) message else "$message: $detail") }
         stopLogging()
     }
 
@@ -167,8 +230,7 @@ class LoggerService : Service() {
             "計測状態",
             NotificationManager.IMPORTANCE_LOW
         )
-        getSystemService(NotificationManager::class.java)
-            .createNotificationChannel(channel)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     override fun onDestroy() {
