@@ -117,11 +117,9 @@ class SessionLogReader {
     )
 
     private fun Map<String, String>.requiredLong(name: String): Long =
-        get(name)?.toLongOrNull() ?: error("${name}が不正です")
-
+    get(name)?.toLongOrNull()?: error("${name}が不正です")
     private fun Map<String, String>.requiredDouble(name: String): Double =
-        optionalDouble(name) ?: error("${name}が不正です")
-
+    optionalDouble(name)?: error("${name}が不正です")
     private fun Map<String, String>.optionalDouble(name: String): Double? =
         get(name)?.takeIf { it.isNotBlank() }?.toDoubleOrNull()
 
