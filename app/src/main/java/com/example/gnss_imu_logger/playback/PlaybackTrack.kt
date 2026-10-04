@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -173,7 +174,8 @@ data class TrackBounds(
 fun PlaybackTrackView(
     track: PlaybackTrack,
     currentLocation: PlaybackLocation?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    overlay: @Composable BoxScope.() -> Unit = {}
 ) {
     val currentPoint = remember(track, currentLocation?.elapsedRealtimeNs) {
         track.pointFor(currentLocation)
@@ -185,7 +187,7 @@ fun PlaybackTrackView(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(280.dp)
+                .height(240.dp)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .clipToBounds(),
             contentAlignment = Alignment.Center
@@ -256,20 +258,8 @@ fun PlaybackTrackView(
 
                 track.segments.forEach { segment ->
                     if (segment.braking && !segment.gnssGap) {
-                        drawLine(
-                            color = BRAKING_INTERVAL_COLOR,
-                            start = segment.start.toOffset(),
-                            end = segment.end.toOffset(),
-                            strokeWidth = 9.dp.toPx(),
-                            cap = StrokeCap.Round
-                        )
-                        drawLine(
-                            color = speedColor(segment.speedMps),
-                            start = segment.start.toOffset(),
-                            end = segment.end.toOffset(),
-                            strokeWidth = 4.dp.toPx(),
-                            cap = StrokeCap.Round
-                        )
+                        drawLine(BRAKING_INTERVAL_COLOR, segment.start.toOffset(), segment.end.toOffset(), 9.dp.toPx(), StrokeCap.Round)
+                        drawLine(speedColor(segment.speedMps), segment.start.toOffset(), segment.end.toOffset(), 4.dp.toPx(), StrokeCap.Round)
                     }
                 }
 
@@ -330,6 +320,7 @@ fun PlaybackTrackView(
                     )
                 }
             }
+            overlay()
         }
         Text(
             "2本指で拡大・縮小、ドラッグで移動できます",
@@ -385,14 +376,6 @@ private fun TrackLegend() {
                     .background(GNSS_GAP_COLOR)
             )
             Text("  GNSS欠損区間（3秒超）")
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(width = 28.dp, height = 7.dp)
-                    .background(BRAKING_INTERVAL_COLOR)
-            )
-            Text("  推定制動区間")
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(

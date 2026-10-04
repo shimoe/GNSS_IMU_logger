@@ -2,6 +2,7 @@ package com.example.gnss_imu_logger.ui.playback
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -10,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.gnss_imu_logger.playback.PlaybackAnalysisSummaryCalculator
@@ -36,10 +38,14 @@ internal fun PlaybackControls(
     PlaybackTrackView(
         track = track,
         currentLocation = sample?.location,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
+        overlay = {
+            VehicleDynamicsHud(
+                sample = sample,
+                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+            )
+        }
     )
-    VehicleDynamicsHud(sample = sample)
-    PlaybackAnalysisSummaryPanel(analysisSummary)
     Text("再生位置: ${formatPlaybackDuration(state.positionMs)} / ${formatPlaybackDuration(state.durationMs)}")
     Slider(
         value = state.positionMs.toFloat(),
@@ -77,6 +83,7 @@ internal fun PlaybackControls(
             }
         }
     }
+    PlaybackAnalysisSummaryPanel(analysisSummary)
     HorizontalDivider()
     Text("速度: ${sample?.location?.speedMps?.let { "%.1f km/h".format(it * 3.6) } ?: "未取得"}")
     Text(
