@@ -14,6 +14,8 @@ import com.example.gnss_imu_logger.calibration.StationaryStatus
 import com.example.gnss_imu_logger.attitude.LeanAngleEstimator
 import com.example.gnss_imu_logger.attitude.LeanAngleLogWriter
 import com.example.gnss_imu_logger.attitude.LeanAngleSnapshot
+import com.example.gnss_imu_logger.attitude.DeviceMountTransform
+import com.example.gnss_imu_logger.attitude.BodyVector
 import com.example.gnss_imu_logger.attitude.VehicleAttitudeEstimator
 import com.example.gnss_imu_logger.attitude.VehicleAttitudeLogWriter
 import com.example.gnss_imu_logger.attitude.VehicleAttitudeSnapshot
@@ -235,9 +237,14 @@ class LoggerService : Service() {
                 )
                 if (result != null) {
                     imuCalibration = ImuCalibration.from(result)
+                    val calibration = requireNotNull(imuCalibration)
                     vehicleAttitudeEstimator = VehicleAttitudeEstimator(
-                        initialRollRad = requireNotNull(imuCalibration).initialRollRad,
-                        initialPitchRad = requireNotNull(imuCalibration).initialPitchRad
+                        initialGravityDeviceMps2 = BodyVector(
+                            calibration.gravityMps2.x,
+                            calibration.gravityMps2.y,
+                            calibration.gravityMps2.z
+                        ),
+                        mountTransform = DeviceMountTransform.SCREEN_UP_TOP_FORWARD
                     )
                     session?.event(
                         EventLevel.INFO,
