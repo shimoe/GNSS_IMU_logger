@@ -110,6 +110,7 @@ class SessionLogReader {
             rollReferenceRad = reference,
             yawRateRadps = yawRate,
             lateralAccelerationMps2 = lateralAcceleration,
+            referenceSource = get("reference_source")?.takeIf { it.isNotBlank() },
             valid = get("estimate_valid")?.toBooleanStrictOrNull() ?: false,
             source = AttitudeSource.RECORDED_LEAN_ANGLE
         )

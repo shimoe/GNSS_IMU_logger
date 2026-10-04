@@ -35,6 +35,7 @@ data class PlaybackAttitude(
     val rollReferenceRad: Double?,
     val yawRateRadps: Double?,
     val lateralAccelerationMps2: Double?,
+    val referenceSource: String?,
     val valid: Boolean,
     val source: AttitudeSource
 )
