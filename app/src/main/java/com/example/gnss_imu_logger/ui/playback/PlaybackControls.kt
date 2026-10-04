@@ -77,6 +77,12 @@ internal fun PlaybackControls(
     Text("緯度: ${sample?.location?.latitudeDeg?.let { "%.7f".format(it) } ?: "位置なし"}")
     Text("経度: ${sample?.location?.longitudeDeg?.let { "%.7f".format(it) } ?: "位置なし"}")
     Text("推定ロール: ${sample?.attitude?.rollRad?.let { "%.2f°".format(Math.toDegrees(it)) } ?: "推定なし"}")
+    Text(
+        "ヨーレート: ${sample?.attitude?.yawRateRadps?.let { "%.3f rad/s".format(it) } ?: "未取得"}"
+    )
+    Text(
+        "横加速度: ${sample?.attitude?.lateralAccelerationMps2?.let { "%.2f m/s²".format(it) } ?: "未取得"}"
+    )
     Text("ロール状態: ${if (sample?.attitude?.valid == true) "有効" else "無効"}")
     Text("最新イベント: ${sample?.latestEvent?.message ?: "なし"}")
 }

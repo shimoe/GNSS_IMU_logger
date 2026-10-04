@@ -98,12 +98,18 @@ class SessionLogReader {
     private fun Map<String, String>.toAttitude(): PlaybackAttitude {
         val roll = optionalDouble("roll_rad")
         val reference = optionalDouble("reference_roll_rad")
+        val yawRate = optionalDouble("yaw_rate_radps")
+        val lateralAcceleration = optionalDouble("centripetal_acceleration_mps2")
         require(roll == null || roll.isFinite())
         require(reference == null || reference.isFinite())
+        require(yawRate == null || yawRate.isFinite())
+        require(lateralAcceleration == null || lateralAcceleration.isFinite())
         return PlaybackAttitude(
             elapsedRealtimeNs = requiredLong("elapsed_realtime_ns"),
             rollRad = roll,
             rollReferenceRad = reference,
+            yawRateRadps = yawRate,
+            lateralAccelerationMps2 = lateralAcceleration,
             valid = get("estimate_valid")?.toBooleanStrictOrNull() ?: false,
             source = AttitudeSource.RECORDED_LEAN_ANGLE
         )
