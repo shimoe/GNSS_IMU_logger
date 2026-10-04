@@ -28,11 +28,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * GNSS緯度経度を軌跡表示用の正規化座標へ変換する。
@@ -175,6 +177,8 @@ fun PlaybackTrackView(
     track: PlaybackTrack,
     currentLocation: PlaybackLocation?,
     modifier: Modifier = Modifier,
+    layerState: PlaybackMapLayerState = PlaybackMapLayerState(),
+    background: @Composable BoxScope.() -> Unit = {},
     overlay: @Composable BoxScope.() -> Unit = {}
 ) {
     val currentPoint = remember(track, currentLocation?.elapsedRealtimeNs) {
@@ -197,8 +201,11 @@ fun PlaybackTrackView(
                 return@Box
             }
 
+            if (layerState.isVisible(PlaybackMapLayer.BACKGROUND_MAP)) {
+                background()
+            }
             val traveledColor = MaterialTheme.colorScheme.onSurface
-            val markerColor = MaterialTheme.colorScheme.error
+            val markerColor = currentMarkerColor(currentLocation)
             val gapColor = GNSS_GAP_COLOR
             Canvas(
                 modifier = Modifier
@@ -318,9 +325,19 @@ fun PlaybackTrackView(
                         center = center,
                         style = Stroke(width = 2.dp.toPx())
                     )
+                    currentLocation?.bearingDeg?.takeIf { it.isFinite() }?.let { bearingDeg ->
+                        drawHeadingArrow(
+                            center = center,
+                            bearingDeg = bearingDeg,
+                            color = markerColor,
+                            sizePx = 18.dp.toPx()
+                        )
+                    }
                 }
             }
-            overlay()
+            if (layerState.isVisible(PlaybackMapLayer.VEHICLE_DYNAMICS_HUD)) {
+                overlay()
+            }
         }
         Text(
             "2本指で拡大・縮小、ドラッグで移動できます",
@@ -405,6 +422,44 @@ private fun LegendItem(
     }
 }
 
+/** 現在位置マーカーの色を加減速状態から決める。 */
+private fun currentMarkerColor(location: PlaybackLocation?): Color = when {
+    location?.braking == true -> CURRENT_BRAKING_COLOR
+    location?.longitudinalAccelerationMps2 == null -> CURRENT_UNKNOWN_COLOR
+    location.longitudinalAccelerationMps2 >= ACCELERATION_DISPLAY_THRESHOLD_MPS2 ->
+        CURRENT_ACCELERATION_COLOR
+    location.longitudinalAccelerationMps2 <= DECELERATION_DISPLAY_THRESHOLD_MPS2 ->
+        CURRENT_DECELERATION_COLOR
+    else -> CURRENT_STEADY_COLOR
+}
+
+/**
+ * GNSS方位を画面上向き0度として矢印表示する。
+ * 入力: 中心座標、方位[deg]、色、矢印サイズ[px]
+ * 出力: Canvasへ進行方向矢印を描画
+ */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawHeadingArrow(
+    center: Offset,
+    bearingDeg: Double,
+    color: Color,
+    sizePx: Float
+) {
+    val angleRad = Math.toRadians(bearingDeg - 90.0)
+    val direction = Offset(cos(angleRad).toFloat(), sin(angleRad).toFloat())
+    val tangent = Offset(-direction.y, direction.x)
+    val tip = center + direction * sizePx
+    val baseCenter = center - direction * (sizePx * 0.35f)
+    val halfWidth = sizePx * 0.42f
+    val path = Path().apply {
+        moveTo(tip.x, tip.y)
+        lineTo(baseCenter.x + tangent.x * halfWidth, baseCenter.y + tangent.y * halfWidth)
+        lineTo(baseCenter.x - tangent.x * halfWidth, baseCenter.y - tangent.y * halfWidth)
+        close()
+    }
+    drawPath(path = path, color = Color.White)
+    drawPath(path = path, color = color, style = Stroke(width = 2.dp.toPx()))
+}
+
 private data class TrackViewport(
     val scale: Float = 1f,
     val translation: Offset = Offset.Zero
@@ -444,6 +499,13 @@ private val SPEED_MEDIUM_COLOR = Color(0xFF2E7D32)
 private val SPEED_HIGH_COLOR = Color(0xFFF9A825)
 private val SPEED_VERY_HIGH_COLOR = Color(0xFFD81B60)
 private val GNSS_GAP_COLOR = Color(0xFF00ACC1)
+private const val ACCELERATION_DISPLAY_THRESHOLD_MPS2 = 0.5
+private const val DECELERATION_DISPLAY_THRESHOLD_MPS2 = -0.5
+private val CURRENT_ACCELERATION_COLOR = Color(0xFF00ACC1)
+private val CURRENT_DECELERATION_COLOR = Color(0xFFF9A825)
+private val CURRENT_BRAKING_COLOR = Color(0xFFFF6D00)
+private val CURRENT_STEADY_COLOR = Color.White
+private val CURRENT_UNKNOWN_COLOR = Color(0xFF9E9E9E)
 private val BRAKING_INTERVAL_COLOR = Color(0xFFE65100)
 private val BRAKING_MARKER_COLOR = Color(0xFFFF6D00)
 private val SPEED_UNKNOWN_COLOR = Color(0xFF757575)
