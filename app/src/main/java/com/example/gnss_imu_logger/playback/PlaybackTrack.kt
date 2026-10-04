@@ -168,6 +168,7 @@ fun PlaybackTrackView(
         track.pointFor(currentLocation)
     }
     var viewport by remember(track) { mutableStateOf(TrackViewport()) }
+    var followCurrentPosition by remember(track) { mutableStateOf(false) }
 
     Column(modifier = modifier) {
         Box(
@@ -192,6 +193,7 @@ fun PlaybackTrackView(
                     .clipToBounds()
                     .pointerInput(track) {
                         detectTransformGestures { _, pan, zoom, _ ->
+                            followCurrentPosition = false
                             viewport = viewport.updated(zoom, pan)
                         }
                     }
@@ -201,12 +203,22 @@ fun PlaybackTrackView(
                 val left = (size.width - content.width) / 2f
                 val top = (size.height - content.height) / 2f
                 val center = Offset(size.width / 2f, size.height / 2f)
+
+                fun TrackPoint.baseOffset(): Offset = Offset(
+                    x = left + (xRatio * content.width).toFloat(),
+                    y = top + ((1.0 - yRatio) * content.height).toFloat()
+                )
+
+                val followTranslation = if (followCurrentPosition && currentPoint != null) {
+                    val currentBase = currentPoint.baseOffset()
+                    center - (center + (currentBase - center) * viewport.scale)
+                } else {
+                    viewport.translation
+                }
+
                 fun TrackPoint.toOffset(): Offset {
-                    val base = Offset(
-                        x = left + (xRatio * content.width).toFloat(),
-                        y = top + ((1.0 - yRatio) * content.height).toFloat()
-                    )
-                    return center + (base - center) * viewport.scale + viewport.translation
+                    val base = baseOffset()
+                    return center + (base - center) * viewport.scale + followTranslation
                 }
 
                 track.segments.forEach { segment ->
@@ -275,18 +287,31 @@ fun PlaybackTrackView(
                 }
             }
         }
+        Text(
+            "2本指で拡大・縮小、ドラッグで移動できます",
+            style = MaterialTheme.typography.labelSmall
+        )
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                "2本指で拡大・縮小、ドラッグで移動できます",
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.weight(1f)
-            )
-            TextButton(onClick = { viewport = TrackViewport() }) {
+            TextButton(
+                onClick = {
+                    followCurrentPosition = false
+                    viewport = TrackViewport()
+                }
+            ) {
                 Text("表示をリセット", maxLines = 1)
+            }
+            TextButton(
+                onClick = { followCurrentPosition = !followCurrentPosition },
+                enabled = currentPoint != null
+            ) {
+                Text(
+                    if (followCurrentPosition) "現在位置を追従中" else "現在位置を追従",
+                    maxLines = 1
+                )
             }
         }
         TrackLegend()
