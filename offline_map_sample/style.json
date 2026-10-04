@@ -1,0 +1,18 @@
+{
+  "version": 8,
+  "name": "GNSS IMU logger offline map",
+  "sources": {
+    "offline-map": {
+      "type": "raster",
+      "url": "__MBTILES_URI__",
+      "tileSize": 256
+    }
+  },
+  "layers": [
+    {
+      "id": "offline-map",
+      "type": "raster",
+      "source": "offline-map"
+    }
+  ]
+}

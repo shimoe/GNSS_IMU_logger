@@ -330,7 +330,7 @@ fun PlaybackTrackView(
                             center = center,
                             bearingDeg = bearingDeg,
                             color = markerColor,
-                            sizePx = 18.dp.toPx()
+                            sizePx = 7.dp.toPx()
                         )
                     }
                 }
@@ -447,17 +447,18 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawHeadingArrow(
     val angleRad = Math.toRadians(bearingDeg - 90.0)
     val direction = Offset(cos(angleRad).toFloat(), sin(angleRad).toFloat())
     val tangent = Offset(-direction.y, direction.x)
+    // 現在位置の外側円（半径11dp）からはみ出さない大きさにする。
     val tip = center + direction * sizePx
-    val baseCenter = center - direction * (sizePx * 0.35f)
-    val halfWidth = sizePx * 0.42f
+    val baseCenter = center - direction * (sizePx * 0.45f)
+    val halfWidth = sizePx * 0.45f
     val path = Path().apply {
         moveTo(tip.x, tip.y)
         lineTo(baseCenter.x + tangent.x * halfWidth, baseCenter.y + tangent.y * halfWidth)
         lineTo(baseCenter.x - tangent.x * halfWidth, baseCenter.y - tangent.y * halfWidth)
         close()
     }
-    drawPath(path = path, color = Color.White)
-    drawPath(path = path, color = color, style = Stroke(width = 2.dp.toPx()))
+    drawPath(path = path, color = color)
+    drawPath(path = path, color = Color.White, style = Stroke(width = 1.dp.toPx()))
 }
 
 private data class TrackViewport(
