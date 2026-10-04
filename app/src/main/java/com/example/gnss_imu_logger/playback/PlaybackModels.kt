@@ -26,6 +26,7 @@ data class PlaybackLocation(
     val altitudeM: Double?,
     val speedMps: Double?,
     val longitudinalAccelerationMps2: Double?,
+    val braking: Boolean,
     val bearingDeg: Double?,
     val horizontalAccuracyM: Double?
 )

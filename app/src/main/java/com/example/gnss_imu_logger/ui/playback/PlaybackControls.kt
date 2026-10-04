@@ -76,6 +76,7 @@ internal fun PlaybackControls(
     Text(
         "前後加速度: ${sample?.location?.longitudinalAccelerationMps2?.let { "%+.2f m/s²".format(it) } ?: "未取得"}"
     )
+    Text("制動状態: ${if (sample?.location?.braking == true) "推定制動中" else "制動なし"}")
     Text("方位: ${sample?.location?.bearingDeg?.let { "%.1f°".format(it) } ?: "未取得"}")
     Text("緯度: ${sample?.location?.latitudeDeg?.let { "%.7f".format(it) } ?: "位置なし"}")
     Text("経度: ${sample?.location?.longitudeDeg?.let { "%.7f".format(it) } ?: "位置なし"}")

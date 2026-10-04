@@ -34,6 +34,7 @@ class SessionLogReader {
         reversedTimestamps += events.countReversed { it.elapsedRealtimeNs }
         locations.sortBy { it.elapsedRealtimeNs }
         calculateLongitudinalAcceleration(locations)
+        detectBraking(locations)
         attitudes.sortBy { it.elapsedRealtimeNs }
         events.sortBy { it.elapsedRealtimeNs }
 
@@ -106,6 +107,47 @@ class SessionLogReader {
         }
     }
 
+    /**
+     * 前後加速度と速度から推定制動区間を検出する。
+     * 入力: 前後加速度を設定済みのGNSS位置
+     * 出力: 0.2秒以上継続した推定制動区間を設定した位置列
+     */
+    private fun detectBraking(locations: MutableList<PlaybackLocation>) {
+        var candidateStartIndex: Int? = null
+        var candidateStartNs: Long? = null
+
+        fun confirmCandidate(endIndex: Int) {
+            val startIndex = candidateStartIndex ?: return
+            val startNs = candidateStartNs ?: return
+            val endNs = locations.getOrNull(endIndex)?.elapsedRealtimeNs ?: return
+            if (endNs - startNs < MINIMUM_BRAKING_DURATION_NS) return
+            for (index in startIndex..endIndex) {
+                locations[index] = locations[index].copy(braking = true)
+            }
+        }
+
+        for (index in locations.indices) {
+            val location = locations[index]
+            val brakingCandidate =
+                location.speedMps?.let { it >= MINIMUM_BRAKING_SPEED_MPS } == true &&
+                    location.longitudinalAccelerationMps2?.let {
+                        it < BRAKING_ACCELERATION_THRESHOLD_MPS2
+                    } == true
+
+            if (brakingCandidate) {
+                if (candidateStartIndex == null) {
+                    candidateStartIndex = index
+                    candidateStartNs = location.elapsedRealtimeNs
+                }
+            } else {
+                confirmCandidate(index - 1)
+                candidateStartIndex = null
+                candidateStartNs = null
+            }
+        }
+        confirmCandidate(locations.lastIndex)
+    }
+
     private fun readRows(file: File, block: (Map<String, String>) -> Unit) {
         if (file.isFile) CsvRowReader(file).forEachRow(block)
     }
@@ -123,6 +165,7 @@ class SessionLogReader {
             altitudeM = optionalDouble("altitude_m"),
             speedMps = optionalDouble("speed_mps"),
             longitudinalAccelerationMps2 = null,
+            braking = false,
             bearingDeg = optionalDouble("bearing_deg"),
             horizontalAccuracyM = optionalDouble("horizontal_accuracy_m")
         )
@@ -177,6 +220,9 @@ class SessionLogReader {
         private const val GNSS_GAP_NS = 3_000_000_000L
         private const val MAX_ACCELERATION_INTERVAL_NS = 2_000_000_000L
         private const val MAX_ABSOLUTE_ACCELERATION_MPS2 = 30.0
+        private const val BRAKING_ACCELERATION_THRESHOLD_MPS2 = -1.4709975
+        private const val MINIMUM_BRAKING_SPEED_MPS = 5.5555555556
+        private const val MINIMUM_BRAKING_DURATION_NS = 200_000_000L
         private const val NS_PER_MS = 1_000_000.0
         private const val NS_PER_SEC = 1_000_000_000.0
     }
