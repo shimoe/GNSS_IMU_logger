@@ -25,7 +25,11 @@ data class MeasurementSnapshot(
     val calibrationGyroscopeSamples: Int = 0,
     val correctedGyroscopeNormRadps: Double? = null,
     val initialRollDeg: Double? = null,
-    val initialPitchDeg: Double? = null
+    val initialPitchDeg: Double? = null,
+    val estimatedRollDeg: Double? = null,
+    val rollReferenceDeg: Double? = null,
+    val rollDriftCorrectionRadps: Double? = null,
+    val leanEstimateValid: Boolean = false
 )
 
 fun interface MeasurementStateListener {

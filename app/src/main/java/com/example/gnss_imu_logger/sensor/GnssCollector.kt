@@ -21,7 +21,7 @@ class GnssCollector(
     private val locationManager: LocationManager,
     private val session: SessionContext,
     private val onFatalError: (String, Throwable?) -> Unit,
-    private val onQualityUpdated: (Long, Int, Float?, Int) -> Unit = { _, _, _, _ -> }
+    private val onQualityUpdated: (Long, Int, Float?, Int, Float?) -> Unit = { _, _, _, _, _ -> }
 ) : LocationListener, Closeable {
     private val handler = Handler(Looper.getMainLooper())
     private val stats = GnssStats()
@@ -76,7 +76,7 @@ class GnssCollector(
             val t=location.elapsedRealtimeNanos; val offset=session.time.updateGnssUtcOffset(t,location.time)
             if(offset.changed) session.event(EventLevel.WARNING,EventType.UTC_OFFSET_CHANGED,"GNSS時刻と端末時刻の差が100 ms以上変化しました")
             stats.add(t); consecutiveLocationCount++
-            onQualityUpdated(t,usedSatellites,if(location.hasAccuracy()) location.accuracy else null,consecutiveLocationCount)
+            onQualityUpdated(t,usedSatellites,if(location.hasAccuracy()) location.accuracy else null,consecutiveLocationCount,if(location.hasSpeed()) location.speed else null)
             locationWriter.write(listOf(t,session.time.sessionElapsedNs(t),location.time,location.latitude,location.longitude,
                 if(location.hasAltitude()) location.altitude else null,if(location.hasSpeed()) location.speed else null,
                 if(location.hasBearing()) location.bearing else null,if(location.hasAccuracy()) location.accuracy else null,

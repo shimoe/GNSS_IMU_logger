@@ -11,6 +11,9 @@ import com.example.gnss_imu_logger.calibration.ImuCalibration
 import com.example.gnss_imu_logger.calibration.InitialCalibration
 import com.example.gnss_imu_logger.calibration.StationaryDetector
 import com.example.gnss_imu_logger.calibration.StationaryStatus
+import com.example.gnss_imu_logger.attitude.LeanAngleEstimator
+import com.example.gnss_imu_logger.attitude.LeanAngleLogWriter
+import com.example.gnss_imu_logger.attitude.LeanAngleSnapshot
 import com.example.gnss_imu_logger.log.CorrectedGyroscopeWriter
 import com.example.gnss_imu_logger.log.SessionContext
 import com.example.gnss_imu_logger.measurement.*
@@ -46,6 +49,10 @@ class LoggerService : Service() {
     @Volatile
     private var correctedGyroscopeNormRadps: Double? = null
     private var correctedGyroscopeWriter: CorrectedGyroscopeWriter? = null
+    private var leanAngleEstimator: LeanAngleEstimator? = null
+    private var leanAngleLogWriter: LeanAngleLogWriter? = null
+    @Volatile
+    private var leanAngleSnapshot: LeanAngleSnapshot? = null
     private val stateListeners = mutableSetOf<MeasurementStateListener>()
     @Volatile
     private var latestSnapshot = MeasurementSnapshot()
@@ -97,6 +104,9 @@ class LoggerService : Service() {
             imuCalibration=null
             correctedGyroscopeNormRadps=null
             correctedGyroscopeWriter=null
+            leanAngleEstimator=LeanAngleEstimator()
+            leanAngleLogWriter=null
+            leanAngleSnapshot=null
             latestLocationNs=null
             latestAccuracyM=null
             latestUsedSatellites=0
@@ -106,6 +116,7 @@ class LoggerService : Service() {
                     s.file("gyro_corrected.bin"),
                     ::postFatalError
                 )
+                leanAngleLogWriter = LeanAngleLogWriter(s.file("lean_angle.csv"))
             }
             s.event(EventLevel.INFO,EventType.SERVICE_STARTED,"計測サービスを開始しました")
             if(incomplete.isNotEmpty())s.event(EventLevel.WARNING,EventType.INCOMPLETE_SESSION_FOUND,"未完了セッションを${incomplete.size}件検出しました")
@@ -121,6 +132,7 @@ class LoggerService : Service() {
                     handleCalibrationEvent(
                         initialCalibration?.addAccelerometer(timestampNs, values)
                     )
+                    leanAngleEstimator?.updateAcceleration(timestampNs, values)
                 },
                 onGyroscopeUpdated = { timestampNs, values ->
                     updateStationary(
@@ -135,6 +147,10 @@ class LoggerService : Service() {
                                 corrected[1] * corrected[1] +
                                 corrected[2] * corrected[2]
                         ).toDouble()
+                        leanAngleEstimator?.updateGyroscope(timestampNs, corrected)?.let { estimate ->
+                            leanAngleSnapshot = estimate
+                            leanAngleLogWriter?.write(estimate)
+                        }
                         if (correctedGyroscopeWriter?.offer(
                                 timestampNs,
                                 corrected,
@@ -149,7 +165,7 @@ class LoggerService : Service() {
                     }
                 }
             ).also { it.start() }
-            gnssCollector=GnssCollector(this,locationManager,s,::postFatalError){t,u,a,c->latestLocationNs=t;latestUsedSatellites=u;latestAccuracyM=a;consecutiveLocationCount=c}.also{it.start()}
+            gnssCollector=GnssCollector(this,locationManager,s,::postFatalError){t,u,a,c,speed->latestLocationNs=t;latestUsedSatellites=u;latestAccuracyM=a;consecutiveLocationCount=c;stationaryDetector?.updateGnssSpeed(t,speed);leanAngleEstimator?.updateSpeed(t,speed)}.also{it.start()}
             environmentCollector=EnvironmentCollector(sensorManager,s,::postFatalError).also{it.start()}
             stateMachine?.transitionTo(MeasurementState.WAITING_FOR_GNSS,"センサーとGNSSの初期化が完了しました")
             readinessCheckRunning=true;mainHandler.post(readinessCheck)
@@ -270,7 +286,11 @@ class LoggerService : Service() {
                 calibrationGyroscopeSamples = initialCalibration?.snapshot()?.gyroscopeSamples ?: 0,
                 correctedGyroscopeNormRadps = correctedGyroscopeNormRadps,
                 initialRollDeg = imuCalibration?.initialRollRad?.let { Math.toDegrees(it) },
-                initialPitchDeg = imuCalibration?.initialPitchRad?.let { Math.toDegrees(it) }
+                initialPitchDeg = imuCalibration?.initialPitchRad?.let { Math.toDegrees(it) },
+                estimatedRollDeg = leanAngleSnapshot?.rollRad?.let { Math.toDegrees(it) },
+                rollReferenceDeg = leanAngleSnapshot?.referenceRollRad?.let { Math.toDegrees(it) },
+                rollDriftCorrectionRadps = leanAngleSnapshot?.driftCorrectionRadps,
+                leanEstimateValid = leanAngleSnapshot?.estimateValid ?: false
             )
         )
 
@@ -319,7 +339,7 @@ class LoggerService : Service() {
             measurementTimeline?.summary(qualitySummary)
         } else null
         val i=imuCollector?.snapshot();val g=gnssCollector?.snapshot();val free=storageMonitor?.freeBytes()?:0L;storageMonitor?.close();storageMonitor=null
-        runCatching{correctedGyroscopeWriter?.close();correctedGyroscopeWriter=null;environmentCollector?.close();environmentCollector=null;gnssCollector?.close();gnssCollector=null;imuCollector?.close();imuCollector=null;val s=session;if(s!=null&&i!=null&&g!=null)s.complete(SessionSummary(
+        runCatching{leanAngleLogWriter?.close();leanAngleLogWriter=null;correctedGyroscopeWriter?.close();correctedGyroscopeWriter=null;environmentCollector?.close();environmentCollector=null;gnssCollector?.close();gnssCollector=null;imuCollector?.close();imuCollector=null;val s=session;if(s!=null&&i!=null&&g!=null)s.complete(SessionSummary(
                 i.accelerometer.toSummary(),
                 i.gyroscope.toSummary(),
                 GnssSummary(g.count, g.meanRateHz, g.maximumIntervalMs),
@@ -340,6 +360,9 @@ class LoggerService : Service() {
         imuCalibration=null
         correctedGyroscopeNormRadps=null
         correctedGyroscopeWriter=null
+        leanAngleEstimator=null
+        leanAngleLogWriter=null
+        leanAngleSnapshot=null
         latestLocationNs=null
         latestAccuracyM=null
         latestUsedSatellites=0

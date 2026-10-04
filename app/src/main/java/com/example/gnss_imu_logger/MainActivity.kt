@@ -133,6 +133,10 @@ private fun LoggerScreen(
         Text("補正後角速度: ${snapshot.correctedGyroscopeNormRadps?.let { "%.5f rad/s".format(it) } ?: "未適用"}")
         Text("初期ロール: ${snapshot.initialRollDeg?.let { "%.3f°".format(it) } ?: "未算出"}")
         Text("初期ピッチ: ${snapshot.initialPitchDeg?.let { "%.3f°".format(it) } ?: "未算出"}")
+        Text("推定ロール: ${snapshot.estimatedRollDeg?.let { "%.2f°".format(it) } ?: "未推定"}")
+        Text("ロール参照: ${snapshot.rollReferenceDeg?.let { "%.2f°".format(it) } ?: "未取得"}")
+        Text("ドリフト補正: ${snapshot.rollDriftCorrectionRadps?.let { "%.5f rad/s".format(it) } ?: "未算出"}")
+        Text("ロール推定: ${if (snapshot.leanEstimateValid) "有効" else "準備中"}")
         Text("計測時間: %02d:%02d".format(snapshot.sessionElapsedMs / 60_000, snapshot.sessionElapsedMs / 1_000 % 60))
 
         Row(verticalAlignment = Alignment.CenterVertically) {
