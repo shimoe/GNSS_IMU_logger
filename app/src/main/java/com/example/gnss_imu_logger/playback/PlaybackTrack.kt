@@ -2,7 +2,6 @@ package com.example.gnss_imu_logger.playback
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -184,14 +185,14 @@ fun PlaybackTrackView(
 
             val traveledColor = MaterialTheme.colorScheme.onSurface
             val markerColor = MaterialTheme.colorScheme.error
-            val gapColor = MaterialTheme.colorScheme.error
+            val gapColor = GNSS_GAP_COLOR
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
                     .clipToBounds()
                     .pointerInput(track) {
                         detectTransformGestures { _, pan, zoom, _ ->
-                            viewport = viewport.updated(zoom = zoom, pan = pan)
+                            viewport = viewport.updated(zoom, pan)
                         }
                     }
                     .padding(16.dp)
@@ -211,7 +212,7 @@ fun PlaybackTrackView(
                 track.segments.forEach { segment ->
                     if (segment.gnssGap) {
                         drawLine(
-                            color = gapColor.copy(alpha = 0.85f),
+                            color = gapColor,
                             start = segment.start.toOffset(),
                             end = segment.end.toOffset(),
                             strokeWidth = 3.dp.toPx(),
@@ -274,11 +275,20 @@ fun PlaybackTrackView(
                 }
             }
         }
-        Text(
-            "2本指で拡大・縮小、ドラッグで移動できます",
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(top = 4.dp)
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "2本指で拡大・縮小、ドラッグで移動できます",
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = { viewport = TrackViewport() }) {
+                Text("表示をリセット", maxLines = 1)
+            }
+        }
         TrackLegend()
     }
 }
@@ -303,7 +313,7 @@ private fun TrackLegend() {
             Box(
                 modifier = Modifier
                     .size(width = 28.dp, height = 3.dp)
-                    .background(Color(0xFFD32F2F))
+                    .background(GNSS_GAP_COLOR)
             )
             Text("  GNSS欠損区間（3秒超）")
         }
@@ -331,23 +341,12 @@ private data class TrackViewport(
     val scale: Float = 1f,
     val translation: Offset = Offset.Zero
 ) {
-    /**
-     * 拡大率と移動量を更新する。
-     * 入力: 拡大率、移動量[px]
-     * 出力: 1倍から5倍へ制限した表示状態
-     */
     fun updated(zoom: Float, pan: Offset): TrackViewport {
-        val nextScale = (scale * zoom).coerceIn(MINIMUM_SCALE, MAXIMUM_SCALE)
-        val scaleRatio = nextScale / scale
+        val nextScale = (scale * zoom).coerceIn(1f, 5f)
         return copy(
             scale = nextScale,
-            translation = translation * scaleRatio + pan
+            translation = translation * (nextScale / scale) + pan
         )
-    }
-
-    companion object {
-        private const val MINIMUM_SCALE = 1f
-        private const val MAXIMUM_SCALE = 5f
     }
 }
 
@@ -375,6 +374,7 @@ private fun speedColor(speedMps: Double?): Color {
 private val SPEED_LOW_COLOR = Color(0xFF1976D2)
 private val SPEED_MEDIUM_COLOR = Color(0xFF2E7D32)
 private val SPEED_HIGH_COLOR = Color(0xFFF9A825)
-private val SPEED_VERY_HIGH_COLOR = Color(0xFFC62828)
+private val SPEED_VERY_HIGH_COLOR = Color(0xFFD81B60)
+private val GNSS_GAP_COLOR = Color(0xFF00ACC1)
 private val SPEED_UNKNOWN_COLOR = Color(0xFF757575)
 private const val MPS_TO_KMH = 3.6

@@ -7,6 +7,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -17,11 +18,6 @@ import com.example.gnss_imu_logger.playback.PlaybackState
 import com.example.gnss_imu_logger.playback.PlaybackTrack
 import com.example.gnss_imu_logger.playback.PlaybackTrackView
 
-/**
- * 再生操作と現在時刻の同期値を表示する。
- * 入力: 再生状態、セッション、再生操作
- * 出力: 軌跡、再生操作、位置・姿勢・イベント表示
- */
 @Composable
 internal fun PlaybackControls(
     state: PlaybackState,
@@ -33,17 +29,12 @@ internal fun PlaybackControls(
 ) {
     val sample = state.sample
     val track = remember(session) { PlaybackTrack(session.locations) }
-
     PlaybackTrackView(
         track = track,
         currentLocation = sample?.location,
         modifier = Modifier.fillMaxWidth()
     )
-    PlaybackDiagnosticsPanel(session)
-    Text(
-        "再生位置: ${formatPlaybackDuration(state.positionMs)} / " +
-            formatPlaybackDuration(state.durationMs)
-    )
+    Text("再生位置: ${formatPlaybackDuration(state.positionMs)} / ${formatPlaybackDuration(state.durationMs)}")
     Slider(
         value = state.positionMs.toFloat(),
         onValueChange = { onSeek(it.toLong()) },
@@ -72,7 +63,11 @@ internal fun PlaybackControls(
                 enabled = speed != state.speedMultiplier,
                 modifier = Modifier.weight(1f)
             ) {
-                Text("${speed}x")
+                Text(
+                    text = playbackSpeedText(speed),
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip
+                )
             }
         }
     }
@@ -84,4 +79,17 @@ internal fun PlaybackControls(
     Text("推定ロール: ${sample?.attitude?.rollRad?.let { "%.2f°".format(Math.toDegrees(it)) } ?: "推定なし"}")
     Text("ロール状態: ${if (sample?.attitude?.valid == true) "有効" else "無効"}")
     Text("最新イベント: ${sample?.latestEvent?.message ?: "なし"}")
+}
+
+
+
+
+/** 再生倍率を1行で表示する。 */
+private fun playbackSpeedText(speed: Double): String = when (speed) {
+    0.25 -> "0.25×"
+    0.5 -> "0.5×"
+    1.0 -> "1×"
+    2.0 -> "2×"
+    4.0 -> "4×"
+    else -> "${speed}×"
 }
