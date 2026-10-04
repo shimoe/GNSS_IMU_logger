@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Slider
@@ -39,6 +40,15 @@ internal fun PlaybackControls(
         track = track,
         currentLocation = sample?.location,
         modifier = Modifier.fillMaxWidth(),
+        background = {
+            OnlinePlaybackMap(
+                onStatusChanged = { status ->
+                    // 状態表示はOnlinePlaybackMap内で行う。
+                    // 次段階で再試行操作へ接続する。
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        },
         overlay = {
             VehicleDynamicsHud(
                 sample = sample,
