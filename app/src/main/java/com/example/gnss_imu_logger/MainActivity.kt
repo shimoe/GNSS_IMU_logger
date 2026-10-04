@@ -498,9 +498,11 @@ private fun PlaybackControls(
     val track = remember(session) { PlaybackTrack(session.locations) }
     PlaybackTrackView(
         track = track,
-        currentElapsedRealtimeNs = sample?.elapsedRealtimeNs,
+        currentLocation = sample?.location,
         modifier = Modifier.fillMaxWidth()
     )
+    Text("GNSS診断: ${session.diagnostics.gnssSamples}件 / 欠損${session.diagnostics.gnssGapCount}区間 / 最大間隔${"%.0f ms".format(session.diagnostics.maximumGnssIntervalMs)}")
+    Text("除外行: ${session.diagnostics.rejectedRows}件 / 時刻逆転${session.diagnostics.reversedTimestamps}件")
     Text("再生位置: ${formatDuration(state.positionMs)} / ${formatDuration(state.durationMs)}")
     Slider(
         value = state.positionMs.toFloat(),
