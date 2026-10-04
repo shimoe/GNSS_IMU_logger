@@ -14,6 +14,9 @@ import com.example.gnss_imu_logger.calibration.StationaryStatus
 import com.example.gnss_imu_logger.attitude.LeanAngleEstimator
 import com.example.gnss_imu_logger.attitude.LeanAngleLogWriter
 import com.example.gnss_imu_logger.attitude.LeanAngleSnapshot
+import com.example.gnss_imu_logger.attitude.VehicleAttitudeEstimator
+import com.example.gnss_imu_logger.attitude.VehicleAttitudeLogWriter
+import com.example.gnss_imu_logger.attitude.VehicleAttitudeSnapshot
 import com.example.gnss_imu_logger.log.CorrectedGyroscopeWriter
 import com.example.gnss_imu_logger.log.SessionContext
 import com.example.gnss_imu_logger.measurement.*
@@ -53,6 +56,10 @@ class LoggerService : Service() {
     private var leanAngleLogWriter: LeanAngleLogWriter? = null
     @Volatile
     private var leanAngleSnapshot: LeanAngleSnapshot? = null
+    private var vehicleAttitudeEstimator: VehicleAttitudeEstimator? = null
+    private var vehicleAttitudeLogWriter: VehicleAttitudeLogWriter? = null
+    @Volatile
+    private var vehicleAttitudeSnapshot: VehicleAttitudeSnapshot? = null
     private val stateListeners = mutableSetOf<MeasurementStateListener>()
     @Volatile
     private var latestSnapshot = MeasurementSnapshot()
@@ -107,6 +114,9 @@ class LoggerService : Service() {
             leanAngleEstimator=LeanAngleEstimator()
             leanAngleLogWriter=null
             leanAngleSnapshot=null
+            vehicleAttitudeEstimator=null
+            vehicleAttitudeLogWriter=null
+            vehicleAttitudeSnapshot=null
             latestLocationNs=null
             latestAccuracyM=null
             latestUsedSatellites=0
@@ -117,6 +127,7 @@ class LoggerService : Service() {
                     ::postFatalError
                 )
                 leanAngleLogWriter = LeanAngleLogWriter(s.file("lean_angle.csv"))
+                vehicleAttitudeLogWriter = VehicleAttitudeLogWriter(s.file("vehicle_attitude.csv"))
             }
             s.event(EventLevel.INFO,EventType.SERVICE_STARTED,"計測サービスを開始しました")
             if(incomplete.isNotEmpty())s.event(EventLevel.WARNING,EventType.INCOMPLETE_SESSION_FOUND,"未完了セッションを${incomplete.size}件検出しました")
@@ -133,6 +144,7 @@ class LoggerService : Service() {
                         initialCalibration?.addAccelerometer(timestampNs, values)
                     )
                     leanAngleEstimator?.updateAcceleration(timestampNs, values)
+                    vehicleAttitudeEstimator?.updateAcceleration(values)
                 },
                 onGyroscopeUpdated = { timestampNs, values ->
                     updateStationary(
@@ -150,6 +162,10 @@ class LoggerService : Service() {
                         leanAngleEstimator?.updateGyroscope(timestampNs, corrected)?.let { estimate ->
                             leanAngleSnapshot = estimate
                             leanAngleLogWriter?.write(estimate)
+                        }
+                        vehicleAttitudeEstimator?.updateGyroscope(timestampNs, corrected)?.let { attitude ->
+                            vehicleAttitudeSnapshot = attitude
+                            vehicleAttitudeLogWriter?.write(attitude)
                         }
                         if (correctedGyroscopeWriter?.offer(
                                 timestampNs,
@@ -219,6 +235,10 @@ class LoggerService : Service() {
                 )
                 if (result != null) {
                     imuCalibration = ImuCalibration.from(result)
+                    vehicleAttitudeEstimator = VehicleAttitudeEstimator(
+                        initialRollRad = requireNotNull(imuCalibration).initialRollRad,
+                        initialPitchRad = requireNotNull(imuCalibration).initialPitchRad
+                    )
                     session?.event(
                         EventLevel.INFO,
                         EventType.CALIBRATION_APPLIED,
@@ -290,7 +310,12 @@ class LoggerService : Service() {
                 estimatedRollDeg = leanAngleSnapshot?.rollRad?.let { Math.toDegrees(it) },
                 rollReferenceDeg = leanAngleSnapshot?.referenceRollRad?.let { Math.toDegrees(it) },
                 rollDriftCorrectionRadps = leanAngleSnapshot?.driftCorrectionRadps,
-                leanEstimateValid = leanAngleSnapshot?.estimateValid ?: false
+                leanEstimateValid = leanAngleSnapshot?.estimateValid ?: false,
+                attitudeRollDeg = vehicleAttitudeSnapshot?.rollRad?.let(Math::toDegrees),
+                attitudePitchDeg = vehicleAttitudeSnapshot?.pitchRad?.let(Math::toDegrees),
+                attitudeYawDeg = vehicleAttitudeSnapshot?.yawRad?.let(Math::toDegrees),
+                attitudeConfidence = vehicleAttitudeSnapshot?.attitudeConfidence,
+                attitudeValid = vehicleAttitudeSnapshot?.attitudeValid ?: false
             )
         )
 
@@ -339,7 +364,7 @@ class LoggerService : Service() {
             measurementTimeline?.summary(qualitySummary)
         } else null
         val i=imuCollector?.snapshot();val g=gnssCollector?.snapshot();val free=storageMonitor?.freeBytes()?:0L;storageMonitor?.close();storageMonitor=null
-        runCatching{leanAngleLogWriter?.close();leanAngleLogWriter=null;correctedGyroscopeWriter?.close();correctedGyroscopeWriter=null;environmentCollector?.close();environmentCollector=null;gnssCollector?.close();gnssCollector=null;imuCollector?.close();imuCollector=null;val s=session;if(s!=null&&i!=null&&g!=null)s.complete(SessionSummary(
+        runCatching{vehicleAttitudeLogWriter?.close();vehicleAttitudeLogWriter=null;leanAngleLogWriter?.close();leanAngleLogWriter=null;correctedGyroscopeWriter?.close();correctedGyroscopeWriter=null;environmentCollector?.close();environmentCollector=null;gnssCollector?.close();gnssCollector=null;imuCollector?.close();imuCollector=null;val s=session;if(s!=null&&i!=null&&g!=null)s.complete(SessionSummary(
                 i.accelerometer.toSummary(),
                 i.gyroscope.toSummary(),
                 GnssSummary(g.count, g.meanRateHz, g.maximumIntervalMs),
@@ -363,6 +388,9 @@ class LoggerService : Service() {
         leanAngleEstimator=null
         leanAngleLogWriter=null
         leanAngleSnapshot=null
+        vehicleAttitudeEstimator=null
+        vehicleAttitudeLogWriter=null
+        vehicleAttitudeSnapshot=null
         latestLocationNs=null
         latestAccuracyM=null
         latestUsedSatellites=0

@@ -29,7 +29,12 @@ data class MeasurementSnapshot(
     val estimatedRollDeg: Double? = null,
     val rollReferenceDeg: Double? = null,
     val rollDriftCorrectionRadps: Double? = null,
-    val leanEstimateValid: Boolean = false
+    val leanEstimateValid: Boolean = false,
+    val attitudeRollDeg: Double? = null,
+    val attitudePitchDeg: Double? = null,
+    val attitudeYawDeg: Double? = null,
+    val attitudeConfidence: Double? = null,
+    val attitudeValid: Boolean = false
 )
 
 fun interface MeasurementStateListener {

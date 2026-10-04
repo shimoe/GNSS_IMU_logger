@@ -10,20 +10,18 @@ import kotlin.math.sqrt
  * 出力: Quaternion、ロール・ピッチ・ヨー、角速度、信頼度
  */
 class VehicleAttitudeEstimator(
-    initialRollRad: Double,
-    initialPitchRad: Double
+    initialGravityDeviceMps2: BodyVector,
+    private val mountTransform: DeviceMountTransform
 ) {
-    private var attitude = AttitudeQuaternion.fromEulerAngles(
-        initialRollRad,
-        initialPitchRad,
-        0.0
+    private var attitude = initialAttitude(
+        mountTransform.deviceToBody(initialGravityDeviceMps2)
     )
     private var latestAcceleration: BodyVector? = null
     private var lastGyroscopeNs: Long? = null
 
     @Synchronized
     fun updateAcceleration(deviceValues: FloatArray) {
-        latestAcceleration = BodyFrameTransform.deviceToBody(deviceValues)
+        latestAcceleration = mountTransform.deviceToBody(deviceValues)
     }
 
     @Synchronized
@@ -31,7 +29,7 @@ class VehicleAttitudeEstimator(
         timestampNs: Long,
         correctedDeviceValuesRadps: FloatArray
     ): VehicleAttitudeSnapshot? {
-        val bodyRate = BodyFrameTransform.deviceToBody(correctedDeviceValuesRadps)
+        val bodyRate = mountTransform.deviceToBody(correctedDeviceValuesRadps)
         val previousNs = lastGyroscopeNs
         lastGyroscopeNs = timestampNs
         if (previousNs == null || timestampNs <= previousNs) return null
@@ -64,8 +62,8 @@ class VehicleAttitudeEstimator(
     }
 
     @Synchronized
-    fun reset(initialRollRad: Double, initialPitchRad: Double) {
-        attitude = AttitudeQuaternion.fromEulerAngles(initialRollRad, initialPitchRad, 0.0)
+    fun reset(initialGravityDeviceMps2: BodyVector) {
+        attitude = initialAttitude(mountTransform.deviceToBody(initialGravityDeviceMps2))
         latestAcceleration = null
         lastGyroscopeNs = null
     }
@@ -97,6 +95,18 @@ class VehicleAttitudeEstimator(
         val correctedRoll = current.rollRad + normalizeAngle(measuredRoll - current.rollRad) * weight
         val correctedPitch = current.pitchRad + normalizeAngle(measuredPitch - current.pitchRad) * weight
         attitude = AttitudeQuaternion.fromEulerAngles(correctedRoll, correctedPitch, current.yawRad)
+    }
+
+    private fun initialAttitude(gravityBodyMps2: BodyVector): AttitudeQuaternion {
+        val rollRad = atan2(gravityBodyMps2.y, gravityBodyMps2.z)
+        val pitchRad = atan2(
+            -gravityBodyMps2.x,
+            sqrt(
+                gravityBodyMps2.y * gravityBodyMps2.y +
+                    gravityBodyMps2.z * gravityBodyMps2.z
+            )
+        )
+        return AttitudeQuaternion.fromEulerAngles(rollRad, pitchRad, 0.0)
     }
 
     private fun normalizeAngle(angleRad: Double): Double {
