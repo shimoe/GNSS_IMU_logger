@@ -64,11 +64,18 @@ def main():
     cal=meta.get('statistics',{}).get('calibration')
     if not cal: raise SystemExit('session.jsonに初期校正結果がありません')
     gravity=getv(cal,'gravity_mps2'); bias=getv(cal,'gyroscope_bias_radps')
+    completed_ns=int(cal['completed_elapsed_ns'])
     gb=device_to_body(gravity)
     roll=math.atan2(gb[1],gb[2]); pitch=math.atan2(-gb[0],math.sqrt(gb[1]**2+gb[2]**2))
     q=qfrom_euler(roll,pitch,0.0)
     accel=read_bin(d/'accel.bin'); gyro=read_bin(d/'gyro.bin')
-    events=sorted([(r[0],0,r) for r in accel]+[(r[0],1,r) for r in gyro])
+    # リアルタイム推定器は初期校正完了時に生成されるため、完了後の受信だけを再生する。
+    # 同一時刻では加速度を先に適用し、その後にジャイロ更新を行う。
+    events=sorted(
+        [(r[0],0,r) for r in accel if r[0] >= completed_ns]+
+        [(r[0],1,r) for r in gyro if r[0] >= completed_ns],
+        key=lambda value:(value[0],value[1])
+    )
     latest=None; last_g=None; rows=[]; skipped=0
     for t,kind,r in events:
         if kind==0:
@@ -106,6 +113,6 @@ def main():
             matched+=1
             max_q=max(max_q,max(abs(r[i]-float(x[n])) for i,n in zip(range(1,5),['quaternion_w','quaternion_x','quaternion_y','quaternion_z'])))
             max_r=max(max_r,abs(r[5]-float(x['roll_rad']))); max_p=max(max_p,abs(r[6]-float(x['pitch_rad'])))
-    summary=(f'加速度件数: {len(accel)}\nジャイロ件数: {len(gyro)}\n姿勢出力件数: {len(rows)}\n更新間隔除外件数: {skipped}\nリアルタイム一致件数: {matched}\nQuaternion成分最大差: {max_q:.12g}\nロール最大差[deg]: {math.degrees(max_r):.12g}\nピッチ最大差[deg]: {math.degrees(max_p):.12g}\n')
+    summary=(f'校正完了時刻[ns]: {completed_ns}\n加速度全件数: {len(accel)}\nジャイロ全件数: {len(gyro)}\n校正後イベント件数: {len(events)}\n姿勢出力件数: {len(rows)}\n更新間隔除外件数: {skipped}\nリアルタイム一致件数: {matched}\nQuaternion成分最大差: {max_q:.12g}\nロール最大差[deg]: {math.degrees(max_r):.12g}\nピッチ最大差[deg]: {math.degrees(max_p):.12g}\n')
     (d/'offline_vehicle_attitude_summary.txt').write_text(summary,encoding='utf-8'); print(summary,end='')
 if __name__=='__main__': main()

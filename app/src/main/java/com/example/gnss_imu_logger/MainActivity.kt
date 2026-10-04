@@ -19,6 +19,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import com.example.gnss_imu_logger.attitude.DeviceMount
 import com.example.gnss_imu_logger.measurement.MeasurementSnapshot
 import com.example.gnss_imu_logger.measurement.MeasurementStateListener
 import com.example.gnss_imu_logger.model.LogMode
@@ -30,6 +31,7 @@ import java.io.File
 class MainActivity : ComponentActivity(), MeasurementStateListener {
     private var snapshot by mutableStateOf(MeasurementSnapshot())
     private var mode by mutableStateOf(LogMode.DIAGNOSTIC)
+    private var deviceMount by mutableStateOf(DeviceMount.DEFAULT)
     private var selectedScreen by mutableStateOf(AppScreen.MEASUREMENT)
     private var service: LoggerService? = null
     private var bound = false
@@ -62,10 +64,12 @@ class MainActivity : ComponentActivity(), MeasurementStateListener {
                     AppContent(
                         snapshot = snapshot,
                         mode = mode,
+                        deviceMount = deviceMount,
                         selectedScreen = selectedScreen,
                         documentsDirectory = documentsDirectory(),
                         onScreenChanged = { selectedScreen = it },
                         onModeChanged = { mode = it },
+                        onDeviceMountChanged = { deviceMount = it },
                         onStart = ::requestStart,
                         onStop = ::stopLogger
                     )
@@ -121,6 +125,7 @@ class MainActivity : ComponentActivity(), MeasurementStateListener {
             Intent(this, LoggerService::class.java)
                 .setAction(LoggerService.ACTION_START)
                 .putExtra(LoggerService.EXTRA_LOG_MODE, mode.name)
+                .putExtra(LoggerService.EXTRA_DEVICE_MOUNT, deviceMount.name)
         )
     }
 

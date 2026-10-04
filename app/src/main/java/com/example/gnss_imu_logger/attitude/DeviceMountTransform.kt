@@ -7,57 +7,42 @@ package com.example.gnss_imu_logger.attitude
  * 出力: 車体座標X/Y/Z
  */
 class DeviceMountTransform private constructor(
-    private val xx: Double,
-    private val xy: Double,
-    private val xz: Double,
-    private val yx: Double,
-    private val yy: Double,
-    private val yz: Double,
-    private val zx: Double,
-    private val zy: Double,
-    private val zz: Double
+    private val forwardDevice: BodyVector,
+    private val leftDevice: BodyVector,
+    private val upDevice: BodyVector
 ) {
     fun deviceToBody(values: FloatArray): BodyVector = deviceToBody(
         BodyVector(
-            x = values.getOrElse(0) { 0f }.toDouble(),
-            y = values.getOrElse(1) { 0f }.toDouble(),
-            z = values.getOrElse(2) { 0f }.toDouble()
+            values.getOrElse(0) { 0f }.toDouble(),
+            values.getOrElse(1) { 0f }.toDouble(),
+            values.getOrElse(2) { 0f }.toDouble()
         )
     )
 
     fun deviceToBody(value: BodyVector): BodyVector = BodyVector(
-        x = xx * value.x + xy * value.y + xz * value.z,
-        y = yx * value.x + yy * value.y + yz * value.z,
-        z = zx * value.x + zy * value.y + zz * value.z
+        x = forwardDevice.dot(value),
+        y = leftDevice.dot(value),
+        z = upDevice.dot(value)
     )
 
     companion object {
-        /** 画面上向き、端末上側が機体前方、端末右側が機体右方。 */
-        val SCREEN_UP_TOP_FORWARD = DeviceMountTransform(
-            xx = 0.0, xy = 1.0, xz = 0.0,
-            yx = -1.0, yy = 0.0, yz = 0.0,
-            zx = 0.0, zy = 0.0, zz = 1.0
-        )
+        fun from(mount: DeviceMount): DeviceMountTransform {
+            val forward = mount.forwardDevice
+            val up = mount.upDevice
+            // 車体Y左方向は、車体上方向と車体前方向の外積で求める。
+            val left = up.cross(forward)
+            return DeviceMountTransform(forward, left, up)
+        }
 
-        /** 画面上向き、端末上側が機体後方。 */
-        val SCREEN_UP_TOP_REAR = DeviceMountTransform(
-            xx = 0.0, xy = -1.0, xz = 0.0,
-            yx = 1.0, yy = 0.0, yz = 0.0,
-            zx = 0.0, zy = 0.0, zz = 1.0
-        )
-
-        /** 画面上向き、端末右側が機体前方。 */
-        val SCREEN_UP_RIGHT_FORWARD = DeviceMountTransform(
-            xx = 1.0, xy = 0.0, xz = 0.0,
-            yx = 0.0, yy = 1.0, yz = 0.0,
-            zx = 0.0, zy = 0.0, zz = 1.0
-        )
-
-        /** 画面上向き、端末左側が機体前方。 */
-        val SCREEN_UP_LEFT_FORWARD = DeviceMountTransform(
-            xx = -1.0, xy = 0.0, xz = 0.0,
-            yx = 0.0, yy = -1.0, yz = 0.0,
-            zx = 0.0, zy = 0.0, zz = 1.0
-        )
+        val SCREEN_UP_TOP_FORWARD = from(DeviceMount.SCREEN_UP_TOP_FORWARD)
     }
 }
+
+private fun BodyVector.dot(other: BodyVector): Double =
+    x * other.x + y * other.y + z * other.z
+
+private fun BodyVector.cross(other: BodyVector): BodyVector = BodyVector(
+    x = y * other.z - z * other.y,
+    y = z * other.x - x * other.z,
+    z = x * other.y - y * other.x
+)

@@ -7,6 +7,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import com.example.gnss_imu_logger.attitude.DeviceMount
 import com.example.gnss_imu_logger.measurement.MeasurementSnapshot
 import com.example.gnss_imu_logger.model.LogMode
 import com.example.gnss_imu_logger.ui.measurement.MeasurementScreen
@@ -22,10 +23,12 @@ enum class AppScreen {
 fun AppContent(
     snapshot: MeasurementSnapshot,
     mode: LogMode,
+    deviceMount: DeviceMount,
     selectedScreen: AppScreen,
     documentsDirectory: File,
     onScreenChanged: (AppScreen) -> Unit,
     onModeChanged: (LogMode) -> Unit,
+    onDeviceMountChanged: (DeviceMount) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -49,7 +52,9 @@ fun AppContent(
             AppScreen.MEASUREMENT -> MeasurementScreen(
                 snapshot = snapshot,
                 mode = mode,
+                deviceMount = deviceMount,
                 onModeChanged = onModeChanged,
+                onDeviceMountChanged = onDeviceMountChanged,
                 onStart = onStart,
                 onStop = onStop,
                 modifier = Modifier.padding(padding)

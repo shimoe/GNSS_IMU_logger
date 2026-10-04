@@ -14,6 +14,7 @@ import com.example.gnss_imu_logger.calibration.StationaryStatus
 import com.example.gnss_imu_logger.attitude.LeanAngleEstimator
 import com.example.gnss_imu_logger.attitude.LeanAngleLogWriter
 import com.example.gnss_imu_logger.attitude.LeanAngleSnapshot
+import com.example.gnss_imu_logger.attitude.DeviceMount
 import com.example.gnss_imu_logger.attitude.DeviceMountTransform
 import com.example.gnss_imu_logger.attitude.BodyVector
 import com.example.gnss_imu_logger.attitude.VehicleAttitudeEstimator
@@ -32,6 +33,7 @@ class LoggerService : Service() {
     companion object {
         const val ACTION_START="logger.START"; const val ACTION_STOP="logger.STOP"
         const val EXTRA_LOG_MODE="logger.LOG_MODE"
+        const val EXTRA_DEVICE_MOUNT="logger.DEVICE_MOUNT"
         private const val CHANNEL_ID="measurement"; private const val NOTIFICATION_ID=1001
         private const val READINESS_CHECK_MS=200L
     }
@@ -59,6 +61,7 @@ class LoggerService : Service() {
     @Volatile
     private var leanAngleSnapshot: LeanAngleSnapshot? = null
     private var vehicleAttitudeEstimator: VehicleAttitudeEstimator? = null
+    private var selectedDeviceMount: DeviceMount = DeviceMount.DEFAULT
     private var vehicleAttitudeLogWriter: VehicleAttitudeLogWriter? = null
     @Volatile
     private var vehicleAttitudeSnapshot: VehicleAttitudeSnapshot? = null
@@ -91,11 +94,12 @@ class LoggerService : Service() {
     }
 
     override fun onCreate(){super.onCreate();sensorManager=getSystemService(SENSOR_SERVICE) as SensorManager;locationManager=getSystemService(LOCATION_SERVICE) as LocationManager;createChannel()}
-    override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{when(intent?.action){ACTION_START->startLogging(parseMode(intent));ACTION_STOP->stopLogging()};return START_NOT_STICKY}
+    override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{when(intent?.action){ACTION_START->startLogging(parseMode(intent), DeviceMount.fromName(intent.getStringExtra(EXTRA_DEVICE_MOUNT)));ACTION_STOP->stopLogging()};return START_NOT_STICKY}
     private fun parseMode(i:Intent)=runCatching{LogMode.valueOf(i.getStringExtra(EXTRA_LOG_MODE)?:LogMode.NORMAL.name)}.getOrDefault(LogMode.NORMAL)
-    private fun startLogging(mode:LogMode){
+    private fun startLogging(mode:LogMode, deviceMount: DeviceMount){
         if(!running.compareAndSet(false,true))return;stopping.set(false)
         try{
+            selectedDeviceMount = deviceMount
             startForeground(NOTIFICATION_ID,notification("センサーを初期化しています"))
             val docs=File(getExternalFilesDir(null),"Documents").apply{mkdirs()};val incomplete=IncompleteSessionScanner.scan(docs)
             val s=SessionContext(this,mode);session=s;stateMachine=MeasurementStateMachine(s) {
@@ -244,12 +248,12 @@ class LoggerService : Service() {
                             calibration.gravityMps2.y,
                             calibration.gravityMps2.z
                         ),
-                        mountTransform = DeviceMountTransform.SCREEN_UP_TOP_FORWARD
+                        mountTransform = selectedDeviceMount.transform()
                     )
                     session?.event(
                         EventLevel.INFO,
                         EventType.CALIBRATION_APPLIED,
-                        "ジャイロバイアス補正と初期姿勢を有効にしました"
+                        "ジャイロバイアス補正と初期姿勢を有効にしました: ${selectedDeviceMount.displayName}"
                     )
                 }
             }
