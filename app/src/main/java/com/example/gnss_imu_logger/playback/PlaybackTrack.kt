@@ -153,6 +153,8 @@ data class TrackSegment(
 ) {
     val gnssGap: Boolean
         get() = intervalNs > PlaybackTrack.GNSS_GAP_NS
+    val braking: Boolean
+        get() = start.braking && end.braking
 }
 
 data class TrackBounds(
@@ -247,6 +249,25 @@ fun PlaybackTrackView(
                             start = segment.start.toOffset(),
                             end = segment.end.toOffset(),
                             strokeWidth = 5.dp.toPx(),
+                            cap = StrokeCap.Round
+                        )
+                    }
+                }
+
+                track.segments.forEach { segment ->
+                    if (segment.braking && !segment.gnssGap) {
+                        drawLine(
+                            color = BRAKING_INTERVAL_COLOR,
+                            start = segment.start.toOffset(),
+                            end = segment.end.toOffset(),
+                            strokeWidth = 9.dp.toPx(),
+                            cap = StrokeCap.Round
+                        )
+                        drawLine(
+                            color = speedColor(segment.speedMps),
+                            start = segment.start.toOffset(),
+                            end = segment.end.toOffset(),
+                            strokeWidth = 4.dp.toPx(),
                             cap = StrokeCap.Round
                         )
                     }
@@ -368,6 +389,14 @@ private fun TrackLegend() {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
+                    .size(width = 28.dp, height = 7.dp)
+                    .background(BRAKING_INTERVAL_COLOR)
+            )
+            Text("  推定制動区間")
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
                     .size(12.dp)
                     .background(BRAKING_MARKER_COLOR)
             )
@@ -432,6 +461,7 @@ private val SPEED_MEDIUM_COLOR = Color(0xFF2E7D32)
 private val SPEED_HIGH_COLOR = Color(0xFFF9A825)
 private val SPEED_VERY_HIGH_COLOR = Color(0xFFD81B60)
 private val GNSS_GAP_COLOR = Color(0xFF00ACC1)
+private val BRAKING_INTERVAL_COLOR = Color(0xFFE65100)
 private val BRAKING_MARKER_COLOR = Color(0xFFFF6D00)
 private val SPEED_UNKNOWN_COLOR = Color(0xFF757575)
 private const val MPS_TO_KMH = 3.6
