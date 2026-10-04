@@ -103,6 +103,7 @@ internal fun PlaybackControls(
         }
     }
     PlaybackAnalysisSummaryPanel(analysisSummary)
+    PlaybackDiagnosticsPanel(session)
     HorizontalDivider()
     Text("速度: ${sample?.location?.speedMps?.let { "%.1f km/h".format(it * 3.6) } ?: "未取得"}")
     Text(
