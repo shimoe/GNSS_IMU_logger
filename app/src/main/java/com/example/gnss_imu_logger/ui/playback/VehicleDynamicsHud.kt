@@ -9,6 +9,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -30,6 +33,26 @@ internal fun VehicleDynamicsHud(sample: PlaybackSample?, modifier: Modifier = Mo
     val braking = sample?.location?.braking == true
     val axisColor = Color.White
     val pointColor = if (braking) BRAKING_COLOR else MaterialTheme.colorScheme.primary
+    val trail = remember { mutableStateListOf<HudTrailPoint>() }
+
+    LaunchedEffect(sample?.elapsedRealtimeNs) {
+        val timestampNs = sample?.elapsedRealtimeNs ?: return@LaunchedEffect
+        val lastTimestampNs = trail.lastOrNull()?.elapsedRealtimeNs
+        if (
+            lastTimestampNs != null &&
+            (timestampNs <= lastTimestampNs || timestampNs - lastTimestampNs > TRAIL_RESET_INTERVAL_NS)
+        ) {
+            trail.clear()
+        }
+        if (longitudinal != null || lateral != null) {
+            trail += HudTrailPoint(
+                elapsedRealtimeNs = timestampNs,
+                longitudinalMps2 = longitudinal ?: 0.0,
+                lateralMps2 = lateral ?: 0.0
+            )
+            while (trail.size > TRAIL_POINT_COUNT) trail.removeAt(0)
+        }
+    }
 
     Column(
         modifier = modifier
@@ -46,6 +69,17 @@ internal fun VehicleDynamicsHud(sample: PlaybackSample?, modifier: Modifier = Mo
             drawCircle(axisColor.copy(alpha = 0.35f), radius * 0.5f, center, style = Stroke(1.dp.toPx()))
             drawLine(axisColor.copy(alpha = 0.45f), Offset(center.x - radius, center.y), Offset(center.x + radius, center.y), 1.dp.toPx())
             drawLine(axisColor.copy(alpha = 0.45f), Offset(center.x, center.y - radius), Offset(center.x, center.y + radius), 1.dp.toPx())
+
+            trail.forEachIndexed { index, value ->
+                val trailX = (value.lateralMps2 / ACCELERATION_LIMIT_MPS2).coerceIn(-1.0, 1.0)
+                val trailY = (value.longitudinalMps2 / ACCELERATION_LIMIT_MPS2).coerceIn(-1.0, 1.0)
+                val trailPoint = Offset(
+                    center.x + (radius * trailX).toFloat(),
+                    center.y + (radius * trailY).toFloat()
+                )
+                val alpha = ((index + 1).toFloat() / trail.size.coerceAtLeast(1)) * 0.45f
+                drawCircle(pointColor.copy(alpha = alpha), 2.5.dp.toPx(), trailPoint)
+            }
 
             if (longitudinal != null || lateral != null) {
                 val x = ((lateral ?: 0.0) / ACCELERATION_LIMIT_MPS2).coerceIn(-1.0, 1.0)
@@ -74,6 +108,14 @@ internal fun VehicleDynamicsHud(sample: PlaybackSample?, modifier: Modifier = Mo
     }
 }
 
+private data class HudTrailPoint(
+    val elapsedRealtimeNs: Long,
+    val longitudinalMps2: Double,
+    val lateralMps2: Double
+)
+
+private const val TRAIL_POINT_COUNT = 12
+private const val TRAIL_RESET_INTERVAL_NS = 2_000_000_000L
 private const val HUD_SIZE_DP = 112
 private const val HUD_CANVAS_DP = 86
 private const val ACCELERATION_LIMIT_MPS2 = 10.0
