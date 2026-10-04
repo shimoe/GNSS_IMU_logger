@@ -25,6 +25,7 @@ data class PlaybackLocation(
     val longitudeDeg: Double,
     val altitudeM: Double?,
     val speedMps: Double?,
+    val longitudinalAccelerationMps2: Double?,
     val bearingDeg: Double?,
     val horizontalAccuracyM: Double?
 )
@@ -35,7 +36,6 @@ data class PlaybackAttitude(
     val rollReferenceRad: Double?,
     val yawRateRadps: Double?,
     val lateralAccelerationMps2: Double?,
-    val referenceSource: String?,
     val valid: Boolean,
     val source: AttitudeSource
 )

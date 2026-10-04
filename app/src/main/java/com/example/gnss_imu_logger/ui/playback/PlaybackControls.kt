@@ -73,14 +73,13 @@ internal fun PlaybackControls(
     }
     HorizontalDivider()
     Text("速度: ${sample?.location?.speedMps?.let { "%.1f km/h".format(it * 3.6) } ?: "未取得"}")
+    Text(
+        "前後加速度: ${sample?.location?.longitudinalAccelerationMps2?.let { "%+.2f m/s²".format(it) } ?: "未取得"}"
+    )
     Text("方位: ${sample?.location?.bearingDeg?.let { "%.1f°".format(it) } ?: "未取得"}")
     Text("緯度: ${sample?.location?.latitudeDeg?.let { "%.7f".format(it) } ?: "位置なし"}")
     Text("経度: ${sample?.location?.longitudeDeg?.let { "%.7f".format(it) } ?: "位置なし"}")
     Text("推定ロール: ${sample?.attitude?.rollRad?.let { "%.2f°".format(Math.toDegrees(it)) } ?: "推定なし"}")
-    Text(
-        "ロール参照: ${sample?.attitude?.rollReferenceRad?.let { "%.2f°".format(Math.toDegrees(it)) } ?: "未取得"}"
-    )
-    Text("参照生成: ${referenceSourceText(sample?.attitude?.referenceSource)}")
     Text(
         "ヨーレート: ${sample?.attitude?.yawRateRadps?.let { "%.3f rad/s".format(it) } ?: "未取得"}"
     )
@@ -102,13 +101,4 @@ private fun playbackSpeedText(speed: Double): String = when (speed) {
     2.0 -> "2×"
     4.0 -> "4×"
     else -> "${speed}×"
-}
-
-
-/** lean_angle.csvの参照生成方式を日本語表示へ変換する。 */
-private fun referenceSourceText(source: String?): String = when (source?.uppercase()) {
-    "GRAVITY" -> "重力"
-    "CENTRIPETAL" -> "GNSS速度とヨーレート"
-    null -> "未取得"
-    else -> source
 }

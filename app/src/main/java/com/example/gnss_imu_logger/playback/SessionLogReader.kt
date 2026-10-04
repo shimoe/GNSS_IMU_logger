@@ -33,6 +33,7 @@ class SessionLogReader {
         reversedTimestamps += attitudes.countReversed { it.elapsedRealtimeNs }
         reversedTimestamps += events.countReversed { it.elapsedRealtimeNs }
         locations.sortBy { it.elapsedRealtimeNs }
+        calculateLongitudinalAcceleration(locations)
         attitudes.sortBy { it.elapsedRealtimeNs }
         events.sortBy { it.elapsedRealtimeNs }
 
@@ -74,6 +75,37 @@ class SessionLogReader {
         )
     }
 
+    /**
+     * GNSS速度の差分から車体前後方向の加速度を算出する。
+     * 入力: elapsedRealtimeNs順に整列したGNSS位置
+     * 出力: longitudinalAccelerationMps2を設定した位置列
+     */
+    private fun calculateLongitudinalAcceleration(locations: MutableList<PlaybackLocation>) {
+        for (index in 1 until locations.size) {
+            val previous = locations[index - 1]
+            val current = locations[index]
+            val previousSpeed = previous.speedMps
+            val currentSpeed = current.speedMps
+            val intervalNs = current.elapsedRealtimeNs - previous.elapsedRealtimeNs
+            val acceleration = if (
+                previousSpeed != null && currentSpeed != null &&
+                intervalNs in 1..MAX_ACCELERATION_INTERVAL_NS
+            ) {
+                val intervalSec = intervalNs / NS_PER_SEC
+                ((currentSpeed - previousSpeed) / intervalSec)
+                    .takeIf {
+                        it.isFinite() &&
+                            kotlin.math.abs(it) <= MAX_ABSOLUTE_ACCELERATION_MPS2
+                    }
+            } else {
+                null
+            }
+            locations[index] = current.copy(
+                longitudinalAccelerationMps2 = acceleration
+            )
+        }
+    }
+
     private fun readRows(file: File, block: (Map<String, String>) -> Unit) {
         if (file.isFile) CsvRowReader(file).forEachRow(block)
     }
@@ -90,6 +122,7 @@ class SessionLogReader {
             longitudeDeg = longitude,
             altitudeM = optionalDouble("altitude_m"),
             speedMps = optionalDouble("speed_mps"),
+            longitudinalAccelerationMps2 = null,
             bearingDeg = optionalDouble("bearing_deg"),
             horizontalAccuracyM = optionalDouble("horizontal_accuracy_m")
         )
@@ -110,7 +143,6 @@ class SessionLogReader {
             rollReferenceRad = reference,
             yawRateRadps = yawRate,
             lateralAccelerationMps2 = lateralAcceleration,
-            referenceSource = get("reference_source")?.takeIf { it.isNotBlank() },
             valid = get("estimate_valid")?.toBooleanStrictOrNull() ?: false,
             source = AttitudeSource.RECORDED_LEAN_ANGLE
         )
@@ -143,6 +175,9 @@ class SessionLogReader {
 
     companion object {
         private const val GNSS_GAP_NS = 3_000_000_000L
+        private const val MAX_ACCELERATION_INTERVAL_NS = 2_000_000_000L
+        private const val MAX_ABSOLUTE_ACCELERATION_MPS2 = 30.0
         private const val NS_PER_MS = 1_000_000.0
+        private const val NS_PER_SEC = 1_000_000_000.0
     }
 }
