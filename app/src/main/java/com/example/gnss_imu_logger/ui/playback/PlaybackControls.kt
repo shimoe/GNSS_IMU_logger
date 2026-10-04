@@ -38,6 +38,7 @@ internal fun PlaybackControls(
         currentLocation = sample?.location,
         modifier = Modifier.fillMaxWidth()
     )
+    VehicleDynamicsHud(sample = sample)
     PlaybackAnalysisSummaryPanel(analysisSummary)
     Text("再生位置: ${formatPlaybackDuration(state.positionMs)} / ${formatPlaybackDuration(state.durationMs)}")
     Slider(
