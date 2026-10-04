@@ -1,13 +1,14 @@
 package com.example.gnss_imu_logger.attitude
 
 import kotlin.math.abs
+import kotlin.math.acos
 import kotlin.math.atan2
 import kotlin.math.sqrt
 
 /**
  * 6軸IMUから車体姿勢を推定する。
- * 入力: 車体座標の加速度[m/s^2]、バイアス補正後角速度[rad/s]、elapsedRealtimeNs[ns]
- * 出力: Quaternion、ロール・ピッチ・ヨー、角速度、信頼度
+ * 入力: 端末座標の加速度[m/s^2]、バイアス補正後角速度[rad/s]、elapsedRealtimeNs[ns]
+ * 出力: Quaternion、ロール・ピッチ・ヨー、角速度、重力方向残差、信頼度
  */
 class VehicleAttitudeEstimator(
     initialGravityDeviceMps2: BodyVector,
@@ -37,14 +38,18 @@ class VehicleAttitudeEstimator(
         val dtSec = (timestampNs - previousNs) / NS_PER_SEC
         if (dtSec !in MINIMUM_DT_SEC..MAXIMUM_DT_SEC) return null
 
-        // ジャイロ積分で姿勢を予測する。
+        // 角速度は車体座標で受信しているため、Quaternionの右側へ微小回転を合成する。
         attitude = (attitude * AttitudeQuaternion.fromAngularVelocity(bodyRate, dtSec)).normalized()
 
         val acceleration = latestAcceleration
-        val confidence = acceleration?.let(::accelerationConfidence) ?: 0.0
-        if (acceleration != null && confidence > 0.0) {
-            applyGravityCorrection(acceleration, confidence, dtSec)
+        val normConfidence = acceleration?.let(::accelerationNormConfidence) ?: 0.0
+        val residualBeforeRad = acceleration?.let(::gravityResidualRad)
+        if (acceleration != null && normConfidence > 0.0) {
+            applyGravityCorrection(acceleration, normConfidence, dtSec)
         }
+        val residualAfterRad = acceleration?.let(::gravityResidualRad)
+        val directionConfidence = residualAfterRad?.let(::gravityDirectionConfidence) ?: 0.0
+        val confidence = normConfidence * directionConfidence
 
         val euler = attitude.toEulerAngles()
         return VehicleAttitudeSnapshot(
@@ -56,6 +61,7 @@ class VehicleAttitudeEstimator(
             rollRateRadps = bodyRate.x,
             pitchRateRadps = bodyRate.y,
             yawRateRadps = bodyRate.z,
+            gravityResidualRad = residualAfterRad ?: residualBeforeRad,
             attitudeValid = confidence >= VALID_CONFIDENCE,
             attitudeConfidence = confidence
         )
@@ -69,32 +75,53 @@ class VehicleAttitudeEstimator(
     }
 
     /** 強い並進加速度中は重力補正を弱める。 */
-    private fun accelerationConfidence(acceleration: BodyVector): Double {
-        val norm = sqrt(
-            acceleration.x * acceleration.x +
-                acceleration.y * acceleration.y +
-                acceleration.z * acceleration.z
-        )
+    private fun accelerationNormConfidence(acceleration: BodyVector): Double {
+        val norm = acceleration.norm()
         val error = abs(norm - STANDARD_GRAVITY_MPS2)
         return (1.0 - error / MAXIMUM_GRAVITY_ERROR_MPS2).coerceIn(0.0, 1.0)
     }
 
-    /** 加速度から得たロール・ピッチへ小さく補正し、ヨーはジャイロ積分を維持する。 */
+    /** 推定重力と測定重力の角度残差から信頼度を求める。 */
+    private fun gravityDirectionConfidence(residualRad: Double): Double =
+        (1.0 - residualRad / MAXIMUM_VALID_GRAVITY_RESIDUAL_RAD).coerceIn(0.0, 1.0)
+
+    /**
+     * 重力方向誤差をQuaternionの微小回転として補正する。
+     * Euler角を介さないため、ピッチ±90度付近でもロール・ヨーの結合を避ける。
+     */
     private fun applyGravityCorrection(
         acceleration: BodyVector,
-        confidence: Double,
+        normConfidence: Double,
         dtSec: Double
     ) {
-        val measuredRoll = atan2(acceleration.y, acceleration.z)
-        val measuredPitch = atan2(
-            -acceleration.x,
-            sqrt(acceleration.y * acceleration.y + acceleration.z * acceleration.z)
+        val measuredUpBody = acceleration.normalizedOrNull() ?: return
+        val predictedUpBody = attitude.conjugate()
+            .rotate(WORLD_UP)
+            .normalizedOrNull() ?: return
+
+        val correctionAxisBody = predictedUpBody.cross(measuredUpBody)
+        val axisNorm = correctionAxisBody.norm()
+        if (!axisNorm.isFinite() || axisNorm < MINIMUM_VECTOR_NORM) return
+
+        val residualRad = acos(
+            predictedUpBody.dot(measuredUpBody).coerceIn(-1.0, 1.0)
         )
-        val current = attitude.toEulerAngles()
-        val weight = (GRAVITY_CORRECTION_RATE_PER_SEC * confidence * dtSec).coerceIn(0.0, 1.0)
-        val correctedRoll = current.rollRad + normalizeAngle(measuredRoll - current.rollRad) * weight
-        val correctedPitch = current.pitchRad + normalizeAngle(measuredPitch - current.pitchRad) * weight
-        attitude = AttitudeQuaternion.fromEulerAngles(correctedRoll, correctedPitch, current.yawRad)
+        if (!residualRad.isFinite()) return
+
+        val maximumCorrectionRad = GRAVITY_CORRECTION_RATE_RADPS * normConfidence * dtSec
+        val correctionRad = residualRad.coerceAtMost(maximumCorrectionRad)
+        val correctionRateRadps = correctionAxisBody * (correctionRad / axisNorm / dtSec)
+        attitude = (
+            attitude * AttitudeQuaternion.fromAngularVelocity(correctionRateRadps, dtSec)
+        ).normalized()
+    }
+
+    private fun gravityResidualRad(acceleration: BodyVector): Double? {
+        val measuredUpBody = acceleration.normalizedOrNull() ?: return null
+        val predictedUpBody = attitude.conjugate()
+            .rotate(WORLD_UP)
+            .normalizedOrNull() ?: return null
+        return acos(predictedUpBody.dot(measuredUpBody).coerceIn(-1.0, 1.0))
     }
 
     private fun initialAttitude(gravityBodyMps2: BodyVector): AttitudeQuaternion {
@@ -109,21 +136,37 @@ class VehicleAttitudeEstimator(
         return AttitudeQuaternion.fromEulerAngles(rollRad, pitchRad, 0.0)
     }
 
-    private fun normalizeAngle(angleRad: Double): Double {
-        var value = angleRad
-        while (value > Math.PI) value -= 2.0 * Math.PI
-        while (value < -Math.PI) value += 2.0 * Math.PI
-        return value
+    private fun BodyVector.norm(): Double = sqrt(x * x + y * y + z * z)
+
+    private fun BodyVector.normalizedOrNull(): BodyVector? {
+        val norm = norm()
+        if (!norm.isFinite() || norm < MINIMUM_VECTOR_NORM) return null
+        return BodyVector(x / norm, y / norm, z / norm)
     }
 
+    private fun BodyVector.dot(other: BodyVector): Double =
+        x * other.x + y * other.y + z * other.z
+
+    private fun BodyVector.cross(other: BodyVector): BodyVector = BodyVector(
+        x = y * other.z - z * other.y,
+        y = z * other.x - x * other.z,
+        z = x * other.y - y * other.x
+    )
+
+    private operator fun BodyVector.times(scale: Double): BodyVector =
+        BodyVector(x * scale, y * scale, z * scale)
+
     companion object {
+        private val WORLD_UP = BodyVector(0.0, 0.0, 1.0)
         private const val NS_PER_SEC = 1_000_000_000.0
         private const val STANDARD_GRAVITY_MPS2 = 9.80665
         private const val MAXIMUM_GRAVITY_ERROR_MPS2 = 3.0
-        private const val GRAVITY_CORRECTION_RATE_PER_SEC = 1.5
+        private const val GRAVITY_CORRECTION_RATE_RADPS = 1.5
+        private val MAXIMUM_VALID_GRAVITY_RESIDUAL_RAD = Math.toRadians(30.0)
         private const val VALID_CONFIDENCE = 0.35
         private const val MINIMUM_DT_SEC = 0.0005
         private const val MAXIMUM_DT_SEC = 0.1
+        private const val MINIMUM_VECTOR_NORM = 1e-12
     }
 }
 
@@ -136,6 +179,7 @@ data class VehicleAttitudeSnapshot(
     val rollRateRadps: Double,
     val pitchRateRadps: Double,
     val yawRateRadps: Double,
+    val gravityResidualRad: Double?,
     val attitudeValid: Boolean,
     val attitudeConfidence: Double
 )

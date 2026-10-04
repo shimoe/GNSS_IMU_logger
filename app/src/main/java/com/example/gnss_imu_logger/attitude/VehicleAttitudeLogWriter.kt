@@ -17,7 +17,7 @@ class VehicleAttitudeLogWriter(file: File) : Closeable {
             "quaternion_w", "quaternion_x", "quaternion_y", "quaternion_z",
             "roll_rad", "pitch_rad", "yaw_rad",
             "roll_rate_radps", "pitch_rate_radps", "yaw_rate_radps",
-            "attitude_valid", "attitude_confidence"
+            "gravity_residual_rad", "attitude_valid", "attitude_confidence"
         )
     )
 
@@ -35,6 +35,7 @@ class VehicleAttitudeLogWriter(file: File) : Closeable {
                 value.rollRateRadps,
                 value.pitchRateRadps,
                 value.yawRateRadps,
+                value.gravityResidualRad,
                 value.attitudeValid,
                 value.attitudeConfidence
             )
