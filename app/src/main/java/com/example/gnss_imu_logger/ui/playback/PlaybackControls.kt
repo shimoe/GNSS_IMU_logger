@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.gnss_imu_logger.playback.PlaybackAnalysisSummaryCalculator
 import com.example.gnss_imu_logger.playback.PlaybackController
 import com.example.gnss_imu_logger.playback.PlaybackSession
 import com.example.gnss_imu_logger.playback.PlaybackState
@@ -29,11 +30,15 @@ internal fun PlaybackControls(
 ) {
     val sample = state.sample
     val track = remember(session) { PlaybackTrack(session.locations) }
+    val analysisSummary = remember(session) {
+        PlaybackAnalysisSummaryCalculator.calculate(session)
+    }
     PlaybackTrackView(
         track = track,
         currentLocation = sample?.location,
         modifier = Modifier.fillMaxWidth()
     )
+    PlaybackAnalysisSummaryPanel(analysisSummary)
     Text("再生位置: ${formatPlaybackDuration(state.positionMs)} / ${formatPlaybackDuration(state.durationMs)}")
     Slider(
         value = state.positionMs.toFloat(),
