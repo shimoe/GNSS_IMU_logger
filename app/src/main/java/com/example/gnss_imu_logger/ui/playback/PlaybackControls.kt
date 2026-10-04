@@ -43,6 +43,7 @@ internal fun PlaybackControls(
         background = {
             OnlinePlaybackMap(
                 locations = session.locations,
+                currentLocation = sample?.location,
                 bounds = track.bounds,
                 onStatusChanged = { status ->
                     // 状態表示はOnlinePlaybackMap内で行う。

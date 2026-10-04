@@ -1,6 +1,10 @@
 package com.example.gnss_imu_logger.ui.playback
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
 import android.os.Bundle
 import android.view.ViewGroup
 import androidx.compose.foundation.background
@@ -32,13 +36,20 @@ import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
+import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory.circleColor
 import org.maplibre.android.style.layers.PropertyFactory.circleRadius
 import org.maplibre.android.style.layers.PropertyFactory.circleStrokeColor
 import org.maplibre.android.style.layers.PropertyFactory.circleStrokeWidth
+import org.maplibre.android.style.layers.PropertyFactory.iconAllowOverlap
+import org.maplibre.android.style.layers.PropertyFactory.iconIgnorePlacement
+import org.maplibre.android.style.layers.PropertyFactory.iconImage
+import org.maplibre.android.style.layers.PropertyFactory.iconOpacity
+import org.maplibre.android.style.layers.PropertyFactory.iconRotate
 import org.maplibre.android.style.layers.PropertyFactory.lineCap
 import org.maplibre.android.style.layers.PropertyFactory.lineColor
 import org.maplibre.android.style.layers.PropertyFactory.lineJoin
@@ -64,6 +75,7 @@ internal sealed interface OnlineMapStatus {
 @Composable
 internal fun OnlinePlaybackMap(
     locations: List<PlaybackLocation>,
+    currentLocation: PlaybackLocation?,
     bounds: TrackBounds?,
     onStatusChanged: (OnlineMapStatus) -> Unit,
     modifier: Modifier = Modifier
@@ -85,6 +97,7 @@ internal fun OnlinePlaybackMap(
         }
     }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
+    var style by remember { mutableStateOf<Style?>(null) }
     var status by remember { mutableStateOf<OnlineMapStatus>(OnlineMapStatus.Loading) }
 
     LaunchedEffect(status) { onStatusChanged(status) }
@@ -109,20 +122,25 @@ internal fun OnlinePlaybackMap(
                 isScrollGesturesEnabled = false
                 isZoomGesturesEnabled = false
             }
-            readyMap.setStyle(OPEN_FREE_MAP_STYLE_URL) { style ->
-                addSpeedTrackLayers(style, trackData)
-                addGnssGapLayer(style, trackData.gnssGapFeatures)
+            readyMap.setStyle(OPEN_FREE_MAP_STYLE_URL) { readyStyle ->
+                addSpeedTrackLayers(readyStyle, trackData)
+                addGnssGapLayer(readyStyle, trackData.gnssGapFeatures)
                 addBrakingLayers(
-                    style = style,
+                    style = readyStyle,
                     intervalFeatures = trackData.brakingIntervalFeatures,
                     startFeatures = trackData.brakingStartFeatures
                 )
+                addCurrentPositionLayers(readyStyle)
+
+                style = readyStyle
+                updateCurrentPosition(readyStyle, currentLocation)
                 status = OnlineMapStatus.Ready
             }
         }
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             map = null
+            style = null
             mapView.onDestroy()
         }
     }
@@ -145,6 +163,13 @@ internal fun OnlinePlaybackMap(
         }
     }
 
+    // 再生中は現在位置Sourceと表示状態だけを更新し、軌跡全体は再生成しない。
+    LaunchedEffect(style, currentLocation) {
+        style?.let { readyStyle ->
+            updateCurrentPosition(readyStyle, currentLocation)
+        }
+    }
+
     LaunchedEffect(mapView) {
         delay(MAP_LOAD_TIMEOUT_MS)
         if (status is OnlineMapStatus.Loading) {
@@ -158,6 +183,100 @@ internal fun OnlinePlaybackMap(
         AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
         MapStatusText(status)
     }
+}
+
+/** 現在位置の円と円内の進行方向矢印を追加する。 */
+private fun addCurrentPositionLayers(style: Style) {
+    style.addImage(CURRENT_POSITION_ARROW_IMAGE_ID, createHeadingArrowBitmap())
+    style.addSource(
+        GeoJsonSource(
+            CURRENT_POSITION_SOURCE_ID,
+            FeatureCollection.fromFeatures(emptyArray())
+        )
+    )
+    style.addLayer(
+        CircleLayer(CURRENT_POSITION_CIRCLE_LAYER_ID, CURRENT_POSITION_SOURCE_ID)
+            .withProperties(
+                circleColor(CURRENT_POSITION_UNAVAILABLE_COLOR),
+                circleRadius(CURRENT_POSITION_RADIUS_PX),
+                circleStrokeColor(Color.WHITE),
+                circleStrokeWidth(CURRENT_POSITION_STROKE_WIDTH_PX)
+            )
+    )
+    style.addLayer(
+        SymbolLayer(CURRENT_POSITION_ARROW_LAYER_ID, CURRENT_POSITION_SOURCE_ID)
+            .withProperties(
+                iconImage(CURRENT_POSITION_ARROW_IMAGE_ID),
+                iconAllowOverlap(true),
+                iconIgnorePlacement(true),
+                iconOpacity(0f)
+            )
+    )
+}
+
+/**
+ * 現在位置Sourceと表示状態を更新する。
+ * 入力: 再生カーソルが選択したGNSS位置
+ * 出力: 現在位置、状態色、円内の方位矢印
+ */
+private fun updateCurrentPosition(
+    style: Style,
+    location: PlaybackLocation?
+) {
+    val source = style.getSourceAs<GeoJsonSource>(CURRENT_POSITION_SOURCE_ID) ?: return
+    if (location == null || !location.hasValidCoordinate()) {
+        source.setGeoJson(FeatureCollection.fromFeatures(emptyArray()))
+        return
+    }
+
+    source.setGeoJson(
+        Feature.fromGeometry(
+            Point.fromLngLat(location.longitudeDeg, location.latitudeDeg)
+        )
+    )
+    style.getLayerAs<CircleLayer>(CURRENT_POSITION_CIRCLE_LAYER_ID)
+        ?.setProperties(circleColor(location.currentPositionColor()))
+
+    val bearingDeg = location.bearingDeg?.takeIf { it.isFinite() }
+    style.getLayerAs<SymbolLayer>(CURRENT_POSITION_ARROW_LAYER_ID)
+        ?.setProperties(
+            iconRotate((bearingDeg ?: 0.0).toFloat()),
+            iconOpacity(if (bearingDeg == null) 0f else 1f)
+        )
+}
+
+/** 現在位置円内へ収まる北向き三角矢印を生成する。 */
+private fun createHeadingArrowBitmap(): Bitmap {
+    val bitmap = Bitmap.createBitmap(
+        CURRENT_POSITION_ICON_SIZE_PX,
+        CURRENT_POSITION_ICON_SIZE_PX,
+        Bitmap.Config.ARGB_8888
+    )
+    val canvas = Canvas(bitmap)
+    val center = CURRENT_POSITION_ICON_SIZE_PX / 2f
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL
+    }
+    val path = Path().apply {
+        moveTo(center, center - CURRENT_POSITION_ARROW_LENGTH_PX)
+        lineTo(center - CURRENT_POSITION_ARROW_HALF_WIDTH_PX, center + CURRENT_POSITION_ARROW_REAR_PX)
+        lineTo(center + CURRENT_POSITION_ARROW_HALF_WIDTH_PX, center + CURRENT_POSITION_ARROW_REAR_PX)
+        close()
+    }
+    canvas.drawPath(path, paint)
+    return bitmap
+}
+
+/** 加減速状態から現在位置円の色を返す。 */
+private fun PlaybackLocation.currentPositionColor(): Int = when {
+    braking -> CURRENT_POSITION_BRAKING_COLOR
+    longitudinalAccelerationMps2 == null -> CURRENT_POSITION_UNAVAILABLE_COLOR
+    longitudinalAccelerationMps2 >= ACCELERATION_DISPLAY_THRESHOLD_MPS2 ->
+        CURRENT_POSITION_ACCELERATING_COLOR
+    longitudinalAccelerationMps2 <= DECELERATION_DISPLAY_THRESHOLD_MPS2 ->
+        CURRENT_POSITION_DECELERATING_COLOR
+    else -> CURRENT_POSITION_STEADY_COLOR
 }
 
 /** 速度区分ごとのGeoJSON SourceとLineLayerを追加する。 */
@@ -363,3 +482,20 @@ private const val BRAKING_START_STROKE_WIDTH_PX = 2f
 private val GNSS_GAP_COLOR = Color.rgb(0, 188, 212)
 private val BRAKING_INTERVAL_COLOR = Color.rgb(230, 81, 0)
 private val BRAKING_START_COLOR = Color.rgb(255, 109, 0)
+private const val CURRENT_POSITION_SOURCE_ID = "playback-current-position-source"
+private const val CURRENT_POSITION_CIRCLE_LAYER_ID = "playback-current-position-circle-layer"
+private const val CURRENT_POSITION_ARROW_LAYER_ID = "playback-current-position-arrow-layer"
+private const val CURRENT_POSITION_ARROW_IMAGE_ID = "playback-current-position-arrow-image"
+private const val CURRENT_POSITION_RADIUS_PX = 11f
+private const val CURRENT_POSITION_STROKE_WIDTH_PX = 2f
+private const val CURRENT_POSITION_ICON_SIZE_PX = 22
+private const val CURRENT_POSITION_ARROW_LENGTH_PX = 7f
+private const val CURRENT_POSITION_ARROW_REAR_PX = 3.15f
+private const val CURRENT_POSITION_ARROW_HALF_WIDTH_PX = 3.15f
+private const val ACCELERATION_DISPLAY_THRESHOLD_MPS2 = 0.5
+private const val DECELERATION_DISPLAY_THRESHOLD_MPS2 = -0.5
+private val CURRENT_POSITION_ACCELERATING_COLOR = Color.rgb(0, 188, 212)
+private val CURRENT_POSITION_DECELERATING_COLOR = Color.rgb(255, 214, 0)
+private val CURRENT_POSITION_BRAKING_COLOR = Color.rgb(255, 109, 0)
+private val CURRENT_POSITION_STEADY_COLOR = Color.WHITE
+private val CURRENT_POSITION_UNAVAILABLE_COLOR = Color.GRAY
