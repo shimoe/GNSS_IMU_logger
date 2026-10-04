@@ -1,5 +1,6 @@
 package com.example.gnss_imu_logger.ui.playback
 
+import android.graphics.Color
 import android.os.Bundle
 import android.view.ViewGroup
 import androidx.compose.foundation.background
@@ -23,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import com.example.gnss_imu_logger.playback.PlaybackLocation
 import com.example.gnss_imu_logger.playback.TrackBounds
 import kotlinx.coroutines.delay
 import org.maplibre.android.MapLibre
@@ -30,6 +32,17 @@ import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
+import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.Property
+import org.maplibre.android.style.layers.PropertyFactory.lineCap
+import org.maplibre.android.style.layers.PropertyFactory.lineColor
+import org.maplibre.android.style.layers.PropertyFactory.lineJoin
+import org.maplibre.android.style.layers.PropertyFactory.lineWidth
+import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.geojson.Feature
+import org.maplibre.geojson.FeatureCollection
+import org.maplibre.geojson.LineString
+import org.maplibre.geojson.Point
 
 /** オンライン背景地図の読込状態。 */
 internal sealed interface OnlineMapStatus {
@@ -39,12 +52,13 @@ internal sealed interface OnlineMapStatus {
 }
 
 /**
- * OpenFreeMapを軌跡枠の背景へ表示し、GNSS軌跡範囲へカメラを合わせる。
- * 入力: GNSS軌跡の緯度経度範囲、状態通知
- * 出力: 軌跡範囲へ同期したMapLibre MapView、読込状態、帰属表示
+ * OpenFreeMapへ速度別GNSS軌跡を表示する。
+ * 入力: GNSS位置列、軌跡範囲、状態通知
+ * 出力: 緯度経度へ一致した速度別軌跡と背景地図
  */
 @Composable
 internal fun OnlinePlaybackMap(
+    locations: List<PlaybackLocation>,
     bounds: TrackBounds?,
     onStatusChanged: (OnlineMapStatus) -> Unit,
     modifier: Modifier = Modifier
@@ -52,6 +66,7 @@ internal fun OnlinePlaybackMap(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraPaddingPx = with(LocalDensity.current) { CAMERA_PADDING_DP.dp.roundToPx() }
+    val trackData = remember(locations) { OnlineTrackData.from(locations) }
     val mapView = remember {
         MapLibre.getInstance(context)
         MapView(context).apply {
@@ -59,7 +74,7 @@ internal fun OnlinePlaybackMap(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            // Canvas側の操作と競合しないよう、地図操作は次段階まで無効にする。
+            // MapLibreへの操作移行前なので、既存Canvasと競合しないようにする。
             isClickable = false
             isFocusable = false
         }
@@ -69,7 +84,7 @@ internal fun OnlinePlaybackMap(
 
     LaunchedEffect(status) { onStatusChanged(status) }
 
-    DisposableEffect(mapView, lifecycleOwner) {
+    DisposableEffect(mapView, lifecycleOwner, trackData) {
         mapView.onCreate(Bundle())
         val observer = object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) = mapView.onStart()
@@ -89,7 +104,8 @@ internal fun OnlinePlaybackMap(
                 isScrollGesturesEnabled = false
                 isZoomGesturesEnabled = false
             }
-            readyMap.setStyle(OPEN_FREE_MAP_STYLE_URL) {
+            readyMap.setStyle(OPEN_FREE_MAP_STYLE_URL) { style ->
+                addSpeedTrackLayers(style, trackData)
                 status = OnlineMapStatus.Ready
             }
         }
@@ -100,7 +116,6 @@ internal fun OnlinePlaybackMap(
         }
     }
 
-    // Style読込後かつMapViewの寸法確定後に、軌跡全体が表示されるカメラへ移動する。
     LaunchedEffect(map, status, bounds, cameraPaddingPx) {
         val readyMap = map ?: return@LaunchedEffect
         val trackBounds = bounds ?: return@LaunchedEffect
@@ -134,6 +149,80 @@ internal fun OnlinePlaybackMap(
     }
 }
 
+/** 速度区分ごとのGeoJSON SourceとLineLayerを追加する。 */
+private fun addSpeedTrackLayers(
+    style: org.maplibre.android.maps.Style,
+    trackData: OnlineTrackData
+) {
+    SpeedBand.entries.forEach { band ->
+        val sourceId = "playback-speed-source-${band.id}"
+        val layerId = "playback-speed-layer-${band.id}"
+        style.addSource(
+            GeoJsonSource(
+                sourceId,
+                FeatureCollection.fromFeatures(trackData.features[band].orEmpty())
+            )
+        )
+        style.addLayer(
+            LineLayer(layerId, sourceId).withProperties(
+                lineColor(band.color),
+                lineWidth(TRACK_WIDTH_PX),
+                lineCap(Property.LINE_CAP_ROUND),
+                lineJoin(Property.LINE_JOIN_ROUND)
+            )
+        )
+    }
+}
+
+/** 地図用の速度別線分。3秒超のGNSS欠損は線を生成しない。 */
+private data class OnlineTrackData(
+    val features: Map<SpeedBand, List<Feature>>
+) {
+    companion object {
+        fun from(locations: List<PlaybackLocation>): OnlineTrackData {
+            val result = SpeedBand.entries.associateWith { mutableListOf<Feature>() }
+            locations.zipWithNext().forEach { (start, end) ->
+                if (!start.hasValidCoordinate() || !end.hasValidCoordinate()) return@forEach
+                if (end.elapsedRealtimeNs - start.elapsedRealtimeNs > GNSS_GAP_NS) return@forEach
+                val speedMps = listOfNotNull(start.speedMps, end.speedMps).averageOrNull()
+                    ?: return@forEach
+                val band = SpeedBand.from(speedMps * MPS_TO_KMH)
+                val line = LineString.fromLngLats(
+                    listOf(
+                        Point.fromLngLat(start.longitudeDeg, start.latitudeDeg),
+                        Point.fromLngLat(end.longitudeDeg, end.latitudeDeg)
+                    )
+                )
+                result.getValue(band) += Feature.fromGeometry(line)
+            }
+            return OnlineTrackData(result)
+        }
+    }
+}
+
+private enum class SpeedBand(val id: String, val color: Int) {
+    LOW("low", Color.rgb(30, 136, 229)),
+    MEDIUM("medium", Color.rgb(67, 160, 71)),
+    HIGH("high", Color.rgb(251, 140, 0)),
+    VERY_HIGH("very-high", Color.rgb(216, 27, 96));
+
+    companion object {
+        fun from(speedKmh: Double): SpeedBand = when {
+            speedKmh < 20.0 -> LOW
+            speedKmh < 50.0 -> MEDIUM
+            speedKmh < 80.0 -> HIGH
+            else -> VERY_HIGH
+        }
+    }
+}
+
+private fun PlaybackLocation.hasValidCoordinate(): Boolean =
+    latitudeDeg.isFinite() && longitudeDeg.isFinite() &&
+        latitudeDeg in -90.0..90.0 && longitudeDeg in -180.0..180.0
+
+private fun List<Double>.averageOrNull(): Double? =
+    takeIf { it.isNotEmpty() }?.average()?.takeIf { it.isFinite() }
+
 @Composable
 private fun MapStatusText(status: OnlineMapStatus) {
     val text = when (status) {
@@ -158,3 +247,6 @@ private fun MapStatusText(status: OnlineMapStatus) {
 private const val OPEN_FREE_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 private const val MAP_LOAD_TIMEOUT_MS = 15_000L
 private const val CAMERA_PADDING_DP = 24
+private const val TRACK_WIDTH_PX = 4f
+private const val GNSS_GAP_NS = 3_000_000_000L
+private const val MPS_TO_KMH = 3.6
