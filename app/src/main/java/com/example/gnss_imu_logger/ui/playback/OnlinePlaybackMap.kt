@@ -336,17 +336,25 @@ private fun createHeadingArrowBitmap(): Bitmap {
     )
     val canvas = Canvas(bitmap)
     val center = CURRENT_POSITION_ICON_SIZE_PX / 2f
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        style = Paint.Style.FILL
-    }
     val path = Path().apply {
         moveTo(center, center - CURRENT_POSITION_ARROW_LENGTH_PX)
         lineTo(center - CURRENT_POSITION_ARROW_HALF_WIDTH_PX, center + CURRENT_POSITION_ARROW_REAR_PX)
         lineTo(center + CURRENT_POSITION_ARROW_HALF_WIDTH_PX, center + CURRENT_POSITION_ARROW_REAR_PX)
         close()
     }
-    canvas.drawPath(path, paint)
+    // 白い道路や淡色背景でも判別できるよう、黒縁を先に描いてから白で塗る。
+    val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.BLACK
+        style = Paint.Style.STROKE
+        strokeWidth = CURRENT_POSITION_ARROW_STROKE_WIDTH_PX
+        strokeJoin = Paint.Join.ROUND
+    }
+    val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL
+    }
+    canvas.drawPath(path, outlinePaint)
+    canvas.drawPath(path, fillPaint)
     return bitmap
 }
 
@@ -568,16 +576,17 @@ private const val CURRENT_POSITION_SOURCE_ID = "playback-current-position-source
 private const val CURRENT_POSITION_CIRCLE_LAYER_ID = "playback-current-position-circle-layer"
 private const val CURRENT_POSITION_ARROW_LAYER_ID = "playback-current-position-arrow-layer"
 private const val CURRENT_POSITION_ARROW_IMAGE_ID = "playback-current-position-arrow-image"
-private const val CURRENT_POSITION_RADIUS_PX = 11f
-private const val CURRENT_POSITION_STROKE_WIDTH_PX = 2f
-private const val CURRENT_POSITION_ICON_SIZE_PX = 22
-private const val CURRENT_POSITION_ARROW_LENGTH_PX = 7f
-private const val CURRENT_POSITION_ARROW_REAR_PX = 3.15f
-private const val CURRENT_POSITION_ARROW_HALF_WIDTH_PX = 3.15f
+private const val CURRENT_POSITION_RADIUS_PX = 13f
+private const val CURRENT_POSITION_STROKE_WIDTH_PX = 2.5f
+private const val CURRENT_POSITION_ICON_SIZE_PX = 32
+private const val CURRENT_POSITION_ARROW_LENGTH_PX = 11f
+private const val CURRENT_POSITION_ARROW_REAR_PX = 5f
+private const val CURRENT_POSITION_ARROW_HALF_WIDTH_PX = 5f
+private const val CURRENT_POSITION_ARROW_STROKE_WIDTH_PX = 3f
 private const val ACCELERATION_DISPLAY_THRESHOLD_MPS2 = 0.5
 private const val DECELERATION_DISPLAY_THRESHOLD_MPS2 = -0.5
 private val CURRENT_POSITION_ACCELERATING_COLOR = Color.rgb(0, 188, 212)
 private val CURRENT_POSITION_DECELERATING_COLOR = Color.rgb(255, 214, 0)
 private val CURRENT_POSITION_BRAKING_COLOR = Color.rgb(255, 109, 0)
-private val CURRENT_POSITION_STEADY_COLOR = Color.WHITE
-private val CURRENT_POSITION_UNAVAILABLE_COLOR = Color.GRAY
+private val CURRENT_POSITION_STEADY_COLOR = Color.rgb(33, 150, 243)
+private val CURRENT_POSITION_UNAVAILABLE_COLOR = Color.rgb(97, 97, 97)
