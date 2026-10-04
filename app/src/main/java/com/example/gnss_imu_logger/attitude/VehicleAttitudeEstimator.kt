@@ -99,7 +99,9 @@ class VehicleAttitudeEstimator(
             .rotate(WORLD_UP)
             .normalizedOrNull() ?: return
 
-        val correctionAxisBody = predictedUpBody.cross(measuredUpBody)
+        // 現在姿勢へ右側から車体座標の補正回転を合成するため、
+        // 測定上方向から予測上方向への外積を使用する。
+        val correctionAxisBody = measuredUpBody.cross(predictedUpBody)
         val axisNorm = correctionAxisBody.norm()
         if (!axisNorm.isFinite() || axisNorm < MINIMUM_VECTOR_NORM) return
 
