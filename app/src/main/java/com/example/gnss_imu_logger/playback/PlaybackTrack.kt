@@ -44,6 +44,7 @@ class PlaybackTrack(locations: List<PlaybackLocation>) {
     val bounds: TrackBounds?
     val xRange: Double
     val yRange: Double
+    val brakingStartPoints: List<TrackPoint>
     private val pointByTimestampNs: Map<Long, TrackPoint>
 
     init {
@@ -56,6 +57,7 @@ class PlaybackTrack(locations: List<PlaybackLocation>) {
             bounds = null
             xRange = 1.0
             yRange = 1.0
+            brakingStartPoints = emptyList()
             pointByTimestampNs = emptyMap()
         } else {
             val latitudeOriginDeg = validLocations.map { it.latitudeDeg }.average()
@@ -66,7 +68,8 @@ class PlaybackTrack(locations: List<PlaybackLocation>) {
                     elapsedRealtimeNs = location.elapsedRealtimeNs,
                     x = location.longitudeDeg * longitudeScale,
                     y = location.latitudeDeg,
-                    speedMps = location.speedMps
+                    speedMps = location.speedMps,
+                    braking = location.braking
                 )
             }
             val minX = projected.minOf { it.x }
@@ -79,11 +82,12 @@ class PlaybackTrack(locations: List<PlaybackLocation>) {
             yRange = height
 
             points = projected.map {
-                TrackPoint(
-                    elapsedRealtimeNs = it.elapsedRealtimeNs,
-                    xRatio = (it.x - minX) / width,
-                    yRatio = (it.y - minY) / height,
-                    speedMps = it.speedMps
+                    TrackPoint(
+                        elapsedRealtimeNs = it.elapsedRealtimeNs,
+                        xRatio = (it.x - minX) / width,
+                        yRatio = (it.y - minY) / height,
+                        speedMps = it.speedMps,
+                        braking = it.braking
                 )
             }
             segments = points.zipWithNext { start, end ->
@@ -95,6 +99,9 @@ class PlaybackTrack(locations: List<PlaybackLocation>) {
                 )
             }
             pointByTimestampNs = points.associateBy { it.elapsedRealtimeNs }
+            brakingStartPoints = points.filterIndexed { index, point ->
+                point.braking && points.getOrNull(index - 1)?.braking != true
+            }
             bounds = TrackBounds(
                 minimumLatitudeDeg = validLocations.minOf { it.latitudeDeg },
                 maximumLatitudeDeg = validLocations.maxOf { it.latitudeDeg },
@@ -118,7 +125,8 @@ class PlaybackTrack(locations: List<PlaybackLocation>) {
         val elapsedRealtimeNs: Long,
         val x: Double,
         val y: Double,
-        val speedMps: Double?
+        val speedMps: Double?,
+        val braking: Boolean
     )
 
     companion object {
@@ -133,7 +141,8 @@ data class TrackPoint(
     val elapsedRealtimeNs: Long,
     val xRatio: Double,
     val yRatio: Double,
-    val speedMps: Double?
+    val speedMps: Double?,
+    val braking: Boolean
 )
 
 data class TrackSegment(
@@ -266,6 +275,20 @@ fun PlaybackTrackView(
                     }
                 }
 
+                track.brakingStartPoints.forEach { point ->
+                    val brakingCenter = point.toOffset()
+                    drawCircle(
+                        color = BRAKING_MARKER_COLOR,
+                        radius = 9.dp.toPx(),
+                        center = brakingCenter
+                    )
+                    drawCircle(
+                        color = Color.White,
+                        radius = 4.dp.toPx(),
+                        center = brakingCenter
+                    )
+                }
+
                 currentPoint?.let { point ->
                     val center = point.toOffset()
                     drawCircle(
@@ -342,6 +365,14 @@ private fun TrackLegend() {
             )
             Text("  GNSS欠損区間（3秒超）")
         }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .background(BRAKING_MARKER_COLOR)
+            )
+            Text("  推定制動開始位置")
+        }
     }
 }
 
@@ -401,5 +432,6 @@ private val SPEED_MEDIUM_COLOR = Color(0xFF2E7D32)
 private val SPEED_HIGH_COLOR = Color(0xFFF9A825)
 private val SPEED_VERY_HIGH_COLOR = Color(0xFFD81B60)
 private val GNSS_GAP_COLOR = Color(0xFF00ACC1)
+private val BRAKING_MARKER_COLOR = Color(0xFFFF6D00)
 private val SPEED_UNKNOWN_COLOR = Color(0xFF757575)
 private const val MPS_TO_KMH = 3.6
