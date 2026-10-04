@@ -32,8 +32,13 @@ import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
+import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
+import org.maplibre.android.style.layers.PropertyFactory.circleColor
+import org.maplibre.android.style.layers.PropertyFactory.circleRadius
+import org.maplibre.android.style.layers.PropertyFactory.circleStrokeColor
+import org.maplibre.android.style.layers.PropertyFactory.circleStrokeWidth
 import org.maplibre.android.style.layers.PropertyFactory.lineCap
 import org.maplibre.android.style.layers.PropertyFactory.lineColor
 import org.maplibre.android.style.layers.PropertyFactory.lineJoin
@@ -106,6 +111,12 @@ internal fun OnlinePlaybackMap(
             }
             readyMap.setStyle(OPEN_FREE_MAP_STYLE_URL) { style ->
                 addSpeedTrackLayers(style, trackData)
+                addGnssGapLayer(style, trackData.gnssGapFeatures)
+                addBrakingLayers(
+                    style = style,
+                    intervalFeatures = trackData.brakingIntervalFeatures,
+                    startFeatures = trackData.brakingStartFeatures
+                )
                 status = OnlineMapStatus.Ready
             }
         }
@@ -174,28 +185,117 @@ private fun addSpeedTrackLayers(
     }
 }
 
+
+/** GNSS欠損前後をシアン色の専用線として表示する。 */
+private fun addGnssGapLayer(
+    style: org.maplibre.android.maps.Style,
+    features: List<Feature>
+) {
+    style.addSource(
+        GeoJsonSource(
+            GNSS_GAP_SOURCE_ID,
+            FeatureCollection.fromFeatures(features)
+        )
+    )
+    style.addLayer(
+        LineLayer(GNSS_GAP_LAYER_ID, GNSS_GAP_SOURCE_ID).withProperties(
+            lineColor(GNSS_GAP_COLOR),
+            lineWidth(GNSS_GAP_WIDTH_PX),
+            lineCap(Property.LINE_CAP_ROUND),
+            lineJoin(Property.LINE_JOIN_ROUND)
+        )
+    )
+}
+
+/** 推定制動区間と推定制動開始位置を速度別軌跡より前面へ表示する。 */
+private fun addBrakingLayers(
+    style: org.maplibre.android.maps.Style,
+    intervalFeatures: List<Feature>,
+    startFeatures: List<Feature>
+) {
+    style.addSource(
+        GeoJsonSource(
+            BRAKING_INTERVAL_SOURCE_ID,
+            FeatureCollection.fromFeatures(intervalFeatures)
+        )
+    )
+    style.addLayer(
+        LineLayer(BRAKING_INTERVAL_LAYER_ID, BRAKING_INTERVAL_SOURCE_ID).withProperties(
+            lineColor(BRAKING_INTERVAL_COLOR),
+            lineWidth(BRAKING_INTERVAL_WIDTH_PX),
+            lineCap(Property.LINE_CAP_ROUND),
+            lineJoin(Property.LINE_JOIN_ROUND)
+        )
+    )
+    style.addSource(
+        GeoJsonSource(
+            BRAKING_START_SOURCE_ID,
+            FeatureCollection.fromFeatures(startFeatures)
+        )
+    )
+    style.addLayer(
+        CircleLayer(BRAKING_START_LAYER_ID, BRAKING_START_SOURCE_ID).withProperties(
+            circleColor(BRAKING_START_COLOR),
+            circleRadius(BRAKING_START_RADIUS_PX),
+            circleStrokeColor(Color.WHITE),
+            circleStrokeWidth(BRAKING_START_STROKE_WIDTH_PX)
+        )
+    )
+}
+
 /** 地図用の速度別線分。3秒超のGNSS欠損は線を生成しない。 */
 private data class OnlineTrackData(
-    val features: Map<SpeedBand, List<Feature>>
+    val features: Map<SpeedBand, List<Feature>>,
+    val gnssGapFeatures: List<Feature>,
+    val brakingIntervalFeatures: List<Feature>,
+    val brakingStartFeatures: List<Feature>
 ) {
     companion object {
         fun from(locations: List<PlaybackLocation>): OnlineTrackData {
-            val result = SpeedBand.entries.associateWith { mutableListOf<Feature>() }
+            val speedFeatures = SpeedBand.entries.associateWith { mutableListOf<Feature>() }
+            val gapFeatures = mutableListOf<Feature>()
+            val brakingFeatures = mutableListOf<Feature>()
+            val brakingStartFeatures = mutableListOf<Feature>()
+            var brakingActive = false
+
             locations.zipWithNext().forEach { (start, end) ->
                 if (!start.hasValidCoordinate() || !end.hasValidCoordinate()) return@forEach
-                if (end.elapsedRealtimeNs - start.elapsedRealtimeNs > GNSS_GAP_NS) return@forEach
-                val speedMps = listOfNotNull(start.speedMps, end.speedMps).averageOrNull()
-                    ?: return@forEach
-                val band = SpeedBand.from(speedMps * MPS_TO_KMH)
                 val line = LineString.fromLngLats(
                     listOf(
                         Point.fromLngLat(start.longitudeDeg, start.latitudeDeg),
                         Point.fromLngLat(end.longitudeDeg, end.latitudeDeg)
                     )
                 )
-                result.getValue(band) += Feature.fromGeometry(line)
+                val gap = end.elapsedRealtimeNs - start.elapsedRealtimeNs > GNSS_GAP_NS
+                if (gap) {
+                    gapFeatures += Feature.fromGeometry(line)
+                    brakingActive = false
+                    return@forEach
+                }
+
+                val speedMps = listOfNotNull(start.speedMps, end.speedMps).averageOrNull()
+                if (speedMps != null) {
+                    val band = SpeedBand.from(speedMps * MPS_TO_KMH)
+                    speedFeatures.getValue(band) += Feature.fromGeometry(line)
+                }
+
+                val braking = start.braking && end.braking
+                if (braking) {
+                    brakingFeatures += Feature.fromGeometry(line)
+                    if (!brakingActive) {
+                        brakingStartFeatures += Feature.fromGeometry(
+                            Point.fromLngLat(start.longitudeDeg, start.latitudeDeg)
+                        )
+                    }
+                }
+                brakingActive = braking
             }
-            return OnlineTrackData(result)
+            return OnlineTrackData(
+                features = speedFeatures,
+                gnssGapFeatures = gapFeatures,
+                brakingIntervalFeatures = brakingFeatures,
+                brakingStartFeatures = brakingStartFeatures
+            )
         }
     }
 }
@@ -250,3 +350,16 @@ private const val CAMERA_PADDING_DP = 24
 private const val TRACK_WIDTH_PX = 4f
 private const val GNSS_GAP_NS = 3_000_000_000L
 private const val MPS_TO_KMH = 3.6
+private const val GNSS_GAP_SOURCE_ID = "playback-gnss-gap-source"
+private const val GNSS_GAP_LAYER_ID = "playback-gnss-gap-layer"
+private const val BRAKING_INTERVAL_SOURCE_ID = "playback-braking-interval-source"
+private const val BRAKING_INTERVAL_LAYER_ID = "playback-braking-interval-layer"
+private const val BRAKING_START_SOURCE_ID = "playback-braking-start-source"
+private const val BRAKING_START_LAYER_ID = "playback-braking-start-layer"
+private const val GNSS_GAP_WIDTH_PX = 5f
+private const val BRAKING_INTERVAL_WIDTH_PX = 8f
+private const val BRAKING_START_RADIUS_PX = 6f
+private const val BRAKING_START_STROKE_WIDTH_PX = 2f
+private val GNSS_GAP_COLOR = Color.rgb(0, 188, 212)
+private val BRAKING_INTERVAL_COLOR = Color.rgb(230, 81, 0)
+private val BRAKING_START_COLOR = Color.rgb(255, 109, 0)
