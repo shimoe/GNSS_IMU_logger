@@ -17,13 +17,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import com.example.gnss_imu_logger.playback.TrackBounds
 import kotlinx.coroutines.delay
 import org.maplibre.android.MapLibre
+import org.maplibre.android.camera.CameraUpdateFactory
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 
 /** オンライン背景地図の読込状態。 */
@@ -34,17 +39,19 @@ internal sealed interface OnlineMapStatus {
 }
 
 /**
- * OpenFreeMapを軌跡枠の背景へ表示する。
- * 入力: 状態通知
- * 出力: MapLibre MapView、読込状態、帰属表示
+ * OpenFreeMapを軌跡枠の背景へ表示し、GNSS軌跡範囲へカメラを合わせる。
+ * 入力: GNSS軌跡の緯度経度範囲、状態通知
+ * 出力: 軌跡範囲へ同期したMapLibre MapView、読込状態、帰属表示
  */
 @Composable
 internal fun OnlinePlaybackMap(
+    bounds: TrackBounds?,
     onStatusChanged: (OnlineMapStatus) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val cameraPaddingPx = with(LocalDensity.current) { CAMERA_PADDING_DP.dp.roundToPx() }
     val mapView = remember {
         MapLibre.getInstance(context)
         MapView(context).apply {
@@ -52,11 +59,12 @@ internal fun OnlinePlaybackMap(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            // 既存の簡易軌跡操作を維持し、地図操作は次段階で有効化する。
+            // Canvas側の操作と競合しないよう、地図操作は次段階まで無効にする。
             isClickable = false
             isFocusable = false
         }
     }
+    var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var status by remember { mutableStateOf<OnlineMapStatus>(OnlineMapStatus.Loading) }
 
     LaunchedEffect(status) { onStatusChanged(status) }
@@ -70,8 +78,9 @@ internal fun OnlinePlaybackMap(
             override fun onStop(owner: LifecycleOwner) = mapView.onStop()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        mapView.getMapAsync { map ->
-            map.uiSettings.apply {
+        mapView.getMapAsync { readyMap ->
+            map = readyMap
+            readyMap.uiSettings.apply {
                 isCompassEnabled = false
                 isLogoEnabled = false
                 isAttributionEnabled = false
@@ -80,13 +89,33 @@ internal fun OnlinePlaybackMap(
                 isScrollGesturesEnabled = false
                 isZoomGesturesEnabled = false
             }
-            map.setStyle(OPEN_FREE_MAP_STYLE_URL) {
+            readyMap.setStyle(OPEN_FREE_MAP_STYLE_URL) {
                 status = OnlineMapStatus.Ready
             }
         }
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            map = null
             mapView.onDestroy()
+        }
+    }
+
+    // Style読込後かつMapViewの寸法確定後に、軌跡全体が表示されるカメラへ移動する。
+    LaunchedEffect(map, status, bounds, cameraPaddingPx) {
+        val readyMap = map ?: return@LaunchedEffect
+        val trackBounds = bounds ?: return@LaunchedEffect
+        if (status !is OnlineMapStatus.Ready) return@LaunchedEffect
+        mapView.post {
+            if (mapView.width <= 0 || mapView.height <= 0) return@post
+            val mapBounds = LatLngBounds.from(
+                trackBounds.maximumLatitudeDeg,
+                trackBounds.maximumLongitudeDeg,
+                trackBounds.minimumLatitudeDeg,
+                trackBounds.minimumLongitudeDeg
+            )
+            readyMap.moveCamera(
+                CameraUpdateFactory.newLatLngBounds(mapBounds, cameraPaddingPx)
+            )
         }
     }
 
@@ -128,3 +157,4 @@ private fun MapStatusText(status: OnlineMapStatus) {
 
 private const val OPEN_FREE_MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
 private const val MAP_LOAD_TIMEOUT_MS = 15_000L
+private const val CAMERA_PADDING_DP = 24

@@ -42,6 +42,7 @@ internal fun PlaybackControls(
         modifier = Modifier.fillMaxWidth(),
         background = {
             OnlinePlaybackMap(
+                bounds = track.bounds,
                 onStatusChanged = { status ->
                     // 状態表示はOnlinePlaybackMap内で行う。
                     // 次段階で再試行操作へ接続する。
