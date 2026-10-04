@@ -2,6 +2,8 @@ package com.example.gnss_imu_logger.playback
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,9 +16,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -37,6 +43,7 @@ class PlaybackTrack(locations: List<PlaybackLocation>) {
     val bounds: TrackBounds?
     val xRange: Double
     val yRange: Double
+    private val pointByTimestampNs: Map<Long, TrackPoint>
 
     init {
         val validLocations = locations.filter {
@@ -48,6 +55,7 @@ class PlaybackTrack(locations: List<PlaybackLocation>) {
             bounds = null
             xRange = 1.0
             yRange = 1.0
+            pointByTimestampNs = emptyMap()
         } else {
             val latitudeOriginDeg = validLocations.map { it.latitudeDeg }.average()
             val longitudeScale = cos(Math.toRadians(latitudeOriginDeg))
@@ -85,6 +93,7 @@ class PlaybackTrack(locations: List<PlaybackLocation>) {
                     speedMps = end.speedMps ?: start.speedMps
                 )
             }
+            pointByTimestampNs = points.associateBy { it.elapsedRealtimeNs }
             bounds = TrackBounds(
                 minimumLatitudeDeg = validLocations.minOf { it.latitudeDeg },
                 maximumLatitudeDeg = validLocations.maxOf { it.latitudeDeg },
@@ -101,7 +110,7 @@ class PlaybackTrack(locations: List<PlaybackLocation>) {
      */
     fun pointFor(location: PlaybackLocation?): TrackPoint? {
         val timestampNs = location?.elapsedRealtimeNs ?: return null
-        return points.firstOrNull { it.elapsedRealtimeNs == timestampNs }
+        return pointByTimestampNs[timestampNs]
     }
 
     private data class ProjectedPoint(
@@ -157,13 +166,15 @@ fun PlaybackTrackView(
     val currentPoint = remember(track, currentLocation?.elapsedRealtimeNs) {
         track.pointFor(currentLocation)
     }
+    var viewport by remember(track) { mutableStateOf(TrackViewport()) }
 
     Column(modifier = modifier) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(280.dp)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .clipToBounds(),
             contentAlignment = Alignment.Center
         ) {
             if (track.points.isEmpty()) {
@@ -177,15 +188,25 @@ fun PlaybackTrackView(
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
+                    .clipToBounds()
+                    .pointerInput(track) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            viewport = viewport.updated(zoom = zoom, pan = pan)
+                        }
+                    }
                     .padding(16.dp)
             ) {
                 val content = fittedContentSize(size, track.xRange, track.yRange)
                 val left = (size.width - content.width) / 2f
                 val top = (size.height - content.height) / 2f
-                fun TrackPoint.toOffset(): Offset = Offset(
-                    x = left + (xRatio * content.width).toFloat(),
-                    y = top + ((1.0 - yRatio) * content.height).toFloat()
-                )
+                val center = Offset(size.width / 2f, size.height / 2f)
+                fun TrackPoint.toOffset(): Offset {
+                    val base = Offset(
+                        x = left + (xRatio * content.width).toFloat(),
+                        y = top + ((1.0 - yRatio) * content.height).toFloat()
+                    )
+                    return center + (base - center) * viewport.scale + viewport.translation
+                }
 
                 track.segments.forEach { segment ->
                     if (segment.gnssGap) {
@@ -253,6 +274,11 @@ fun PlaybackTrackView(
                 }
             }
         }
+        Text(
+            "2本指で拡大・縮小、ドラッグで移動できます",
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(top = 4.dp)
+        )
         TrackLegend()
     }
 }
@@ -298,6 +324,30 @@ private fun LegendItem(
                 .background(color)
         )
         Text(label, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+private data class TrackViewport(
+    val scale: Float = 1f,
+    val translation: Offset = Offset.Zero
+) {
+    /**
+     * 拡大率と移動量を更新する。
+     * 入力: 拡大率、移動量[px]
+     * 出力: 1倍から5倍へ制限した表示状態
+     */
+    fun updated(zoom: Float, pan: Offset): TrackViewport {
+        val nextScale = (scale * zoom).coerceIn(MINIMUM_SCALE, MAXIMUM_SCALE)
+        val scaleRatio = nextScale / scale
+        return copy(
+            scale = nextScale,
+            translation = translation * scaleRatio + pan
+        )
+    }
+
+    companion object {
+        private const val MINIMUM_SCALE = 1f
+        private const val MAXIMUM_SCALE = 5f
     }
 }
 
