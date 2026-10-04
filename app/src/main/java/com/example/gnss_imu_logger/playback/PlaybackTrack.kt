@@ -178,6 +178,7 @@ fun PlaybackTrackView(
     currentLocation: PlaybackLocation?,
     modifier: Modifier = Modifier,
     layerState: PlaybackMapLayerState = PlaybackMapLayerState(),
+    showSimpleTrack: Boolean = true,
     background: @Composable BoxScope.() -> Unit = {},
     overlay: @Composable BoxScope.() -> Unit = {}
 ) {
@@ -207,7 +208,8 @@ fun PlaybackTrackView(
             val traveledColor = MaterialTheme.colorScheme.onSurface
             val markerColor = currentMarkerColor(currentLocation)
             val gapColor = GNSS_GAP_COLOR
-            Canvas(
+            if (showSimpleTrack) {
+                Canvas(
                 modifier = Modifier
                     .fillMaxSize()
                     .clipToBounds()
@@ -334,6 +336,7 @@ fun PlaybackTrackView(
                         )
                     }
                 }
+            }
             }
             if (layerState.isVisible(PlaybackMapLayer.VEHICLE_DYNAMICS_HUD)) {
                 overlay()

@@ -9,9 +9,13 @@ import android.os.Bundle
 import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -20,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -33,6 +38,7 @@ import com.example.gnss_imu_logger.playback.TrackBounds
 import kotlinx.coroutines.delay
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraUpdateFactory
+import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
@@ -91,14 +97,17 @@ internal fun OnlinePlaybackMap(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            // MapLibreへの操作移行前なので、既存Canvasと競合しないようにする。
-            isClickable = false
-            isFocusable = false
+            // 地図のドラッグとピンチ操作を受け付ける。
+            isClickable = true
+            isFocusable = true
         }
     }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var style by remember { mutableStateOf<Style?>(null) }
     var status by remember { mutableStateOf<OnlineMapStatus>(OnlineMapStatus.Loading) }
+    var followCurrentPosition by remember { mutableStateOf(false) }
+    var mapOperationEnabled by remember { mutableStateOf(false) }
+    var resetRequest by remember { mutableStateOf(0) }
 
     LaunchedEffect(status) { onStatusChanged(status) }
 
@@ -121,6 +130,7 @@ internal fun OnlinePlaybackMap(
                 isTiltGesturesEnabled = false
                 isScrollGesturesEnabled = false
                 isZoomGesturesEnabled = false
+                isDoubleTapGesturesEnabled = false
             }
             readyMap.setStyle(OPEN_FREE_MAP_STYLE_URL) { readyStyle ->
                 addSpeedTrackLayers(readyStyle, trackData)
@@ -131,7 +141,6 @@ internal fun OnlinePlaybackMap(
                     startFeatures = trackData.brakingStartFeatures
                 )
                 addCurrentPositionLayers(readyStyle)
-
                 style = readyStyle
                 updateCurrentPosition(readyStyle, currentLocation)
                 status = OnlineMapStatus.Ready
@@ -145,7 +154,18 @@ internal fun OnlinePlaybackMap(
         }
     }
 
-    LaunchedEffect(map, status, bounds, cameraPaddingPx) {
+    // 通常は画面スクロールを優先し、地図操作モード中だけMapViewへタッチを渡す。
+    LaunchedEffect(map, mapOperationEnabled) {
+        map?.uiSettings?.apply {
+            isScrollGesturesEnabled = mapOperationEnabled
+            isZoomGesturesEnabled = mapOperationEnabled
+            isDoubleTapGesturesEnabled = mapOperationEnabled
+        }
+        mapView.isClickable = mapOperationEnabled
+        mapView.isFocusable = mapOperationEnabled
+    }
+
+    LaunchedEffect(map, status, bounds, cameraPaddingPx, resetRequest) {
         val readyMap = map ?: return@LaunchedEffect
         val trackBounds = bounds ?: return@LaunchedEffect
         if (status !is OnlineMapStatus.Ready) return@LaunchedEffect
@@ -161,6 +181,19 @@ internal fun OnlinePlaybackMap(
                 CameraUpdateFactory.newLatLngBounds(mapBounds, cameraPaddingPx)
             )
         }
+    }
+
+    // 追従中は現在位置を画面中央へ移動し、利用者が選択した縮尺を維持する。
+    LaunchedEffect(map, status, followCurrentPosition, currentLocation?.elapsedRealtimeNs) {
+        val readyMap = map ?: return@LaunchedEffect
+        val location = currentLocation?.takeIf { it.hasValidCoordinate() }
+            ?: return@LaunchedEffect
+        if (status !is OnlineMapStatus.Ready || !followCurrentPosition) return@LaunchedEffect
+        readyMap.animateCamera(
+            CameraUpdateFactory.newLatLng(
+                LatLng(location.latitudeDeg, location.longitudeDeg)
+            )
+        )
     }
 
     // 再生中は現在位置Sourceと表示状態だけを更新し、軌跡全体は再生成しない。
@@ -180,8 +213,57 @@ internal fun OnlinePlaybackMap(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+        AndroidView(
+            factory = { mapView },
+            update = { view ->
+                view.setOnTouchListener { touchedView, event ->
+                    if (mapOperationEnabled) {
+                        touchedView.parent?.requestDisallowInterceptTouchEvent(true)
+                    }
+                    if (event.actionMasked == android.view.MotionEvent.ACTION_UP ||
+                        event.actionMasked == android.view.MotionEvent.ACTION_CANCEL
+                    ) {
+                        touchedView.parent?.requestDisallowInterceptTouchEvent(false)
+                    }
+                    false
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
         MapStatusText(status)
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.84f))
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            TextButton(
+                onClick = {
+                    mapOperationEnabled = !mapOperationEnabled
+                    if (mapOperationEnabled) followCurrentPosition = false
+                }
+            ) {
+                Text(if (mapOperationEnabled) "操作終了" else "地図操作")
+            }
+            TextButton(
+                onClick = {
+                    followCurrentPosition = false
+                    mapOperationEnabled = false
+                    resetRequest++
+                }
+            ) { Text("全体表示") }
+            TextButton(
+                onClick = {
+                    followCurrentPosition = !followCurrentPosition
+                    if (followCurrentPosition) mapOperationEnabled = false
+                },
+                enabled = currentLocation?.hasValidCoordinate() == true
+            ) {
+                Text(if (followCurrentPosition) "追従中" else "現在位置を追従")
+            }
+        }
     }
 }
 

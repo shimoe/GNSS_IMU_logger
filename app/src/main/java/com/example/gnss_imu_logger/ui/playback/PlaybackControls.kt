@@ -12,6 +12,9 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -36,18 +39,21 @@ internal fun PlaybackControls(
     val analysisSummary = remember(session) {
         PlaybackAnalysisSummaryCalculator.calculate(session)
     }
+    var onlineMapStatus by remember(session) {
+        mutableStateOf<OnlineMapStatus>(OnlineMapStatus.Loading)
+    }
     PlaybackTrackView(
         track = track,
         currentLocation = sample?.location,
         modifier = Modifier.fillMaxWidth(),
+        showSimpleTrack = onlineMapStatus !is OnlineMapStatus.Ready,
         background = {
             OnlinePlaybackMap(
                 locations = session.locations,
                 currentLocation = sample?.location,
                 bounds = track.bounds,
                 onStatusChanged = { status ->
-                    // 状態表示はOnlinePlaybackMap内で行う。
-                    // 次段階で再試行操作へ接続する。
+                    onlineMapStatus = status
                 },
                 modifier = Modifier.fillMaxSize()
             )
