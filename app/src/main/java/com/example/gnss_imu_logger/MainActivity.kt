@@ -56,6 +56,9 @@ import com.example.gnss_imu_logger.model.LogMode
 import com.example.gnss_imu_logger.playback.PlaybackController
 import com.example.gnss_imu_logger.playback.PlaybackState
 import com.example.gnss_imu_logger.playback.PlaybackTimeline
+import com.example.gnss_imu_logger.playback.PlaybackSession
+import com.example.gnss_imu_logger.playback.PlaybackTrack
+import com.example.gnss_imu_logger.playback.PlaybackTrackView
 import com.example.gnss_imu_logger.playback.SessionCatalog
 import com.example.gnss_imu_logger.playback.SessionListItem
 import com.example.gnss_imu_logger.playback.SessionLogReader
@@ -409,6 +412,7 @@ private fun PlaybackDetailScreen(
     modifier: Modifier = Modifier
 ) {
     var controller by remember(item.sessionId) { mutableStateOf<PlaybackController?>(null) }
+    var playbackSession by remember(item.sessionId) { mutableStateOf<PlaybackSession?>(null) }
     var state by remember(item.sessionId) { mutableStateOf<PlaybackState?>(null) }
     var loading by remember(item.sessionId) { mutableStateOf(true) }
     var errorMessage by remember(item.sessionId) { mutableStateOf<String?>(null) }
@@ -418,11 +422,12 @@ private fun PlaybackDetailScreen(
         errorMessage = null
         runCatching {
             withContext(Dispatchers.IO) {
-                PlaybackController(PlaybackTimeline(SessionLogReader().read(item)))
+                SessionLogReader().read(item)
             }
-        }.onSuccess {
-            controller = it
-            state = it.state
+        }.onSuccess { session ->
+            playbackSession = session
+            controller = PlaybackController(PlaybackTimeline(session))
+            state = controller?.state
         }.onFailure {
             errorMessage = "セッションを読み込めませんでした: ${it.message}"
         }
@@ -453,8 +458,9 @@ private fun PlaybackDetailScreen(
                 errorMessage.orEmpty(),
                 color = MaterialTheme.colorScheme.error
             )
-            state != null -> PlaybackControls(
+            state != null && playbackSession != null -> PlaybackControls(
                 state = requireNotNull(state),
+                session = requireNotNull(playbackSession),
                 onPlayPause = {
                     val playbackController = controller ?: return@PlaybackControls
                     if (playbackController.state.playing) {
@@ -482,12 +488,19 @@ private fun PlaybackDetailScreen(
 @Composable
 private fun PlaybackControls(
     state: PlaybackState,
+    session: PlaybackSession,
     onPlayPause: () -> Unit,
     onRestart: () -> Unit,
     onSeek: (Long) -> Unit,
     onSpeedChanged: (Double) -> Unit
 ) {
     val sample = state.sample
+    val track = remember(session) { PlaybackTrack(session.locations) }
+    PlaybackTrackView(
+        track = track,
+        currentElapsedRealtimeNs = sample?.elapsedRealtimeNs,
+        modifier = Modifier.fillMaxWidth()
+    )
     Text("再生位置: ${formatDuration(state.positionMs)} / ${formatDuration(state.durationMs)}")
     Slider(
         value = state.positionMs.toFloat(),
