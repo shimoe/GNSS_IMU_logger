@@ -3,6 +3,7 @@ package com.example.gnss_imu_logger.log
 import android.content.Context
 import android.os.Build
 import android.os.SystemClock
+import com.example.gnss_imu_logger.attitude.DeviceMount
 import com.example.gnss_imu_logger.model.EventLevel
 import com.example.gnss_imu_logger.model.EventType
 import com.example.gnss_imu_logger.model.LogMode
@@ -22,7 +23,11 @@ import java.time.format.DateTimeFormatter
  * 入力: Android Context、計測モード
  * 出力: セッションディレクトリ、session.json、events.csv
  */
-class SessionContext(context: Context, val mode: LogMode) : Closeable {
+class SessionContext(
+    context: Context,
+    val mode: LogMode,
+    val deviceMount: DeviceMount
+) : Closeable {
     val time = TimeSynchronizer()
     val sessionId: String = SESSION_FORMAT.format(Instant.now())
     val directory = File(context.getExternalFilesDir(null), "Documents/$sessionId")
@@ -43,6 +48,7 @@ class SessionContext(context: Context, val mode: LogMode) : Closeable {
             sessionId = sessionId,
             status = SessionStatus.RECORDING,
             mode = mode,
+            deviceMount = deviceMount.name,
             manufacturer = Build.MANUFACTURER,
             model = Build.MODEL,
             androidVersion = Build.VERSION.RELEASE,

@@ -8,7 +8,9 @@ import kotlin.math.atan2
  * 入力: 加速度[m/s^2]、補正後角速度[rad/s]、GNSS速度[m/s]、elapsedRealtimeNs[ns]
  * 出力: 推定ロール、参照ロール、角速度補正量
  */
-class LeanAngleEstimator {
+class LeanAngleEstimator(
+    private val mountTransform: DeviceMountTransform
+) {
     private val history = ArrayDeque<WindowSample>()
     private var filteredAcceleration: BodyVector? = null
     private var filteredRollRateRadps = 0.0
@@ -24,7 +26,7 @@ class LeanAngleEstimator {
 
     @Synchronized
     fun updateAcceleration(timestampNs: Long, deviceValues: FloatArray) {
-        val body = BodyFrameTransform.deviceToBody(deviceValues)
+        val body = mountTransform.deviceToBody(deviceValues)
         val previousNs = lastAccelerationNs
         lastAccelerationNs = timestampNs
         if (previousNs == null || timestampNs <= previousNs) {
@@ -52,7 +54,7 @@ class LeanAngleEstimator {
         timestampNs: Long,
         correctedDeviceValues: FloatArray
     ): LeanAngleSnapshot? {
-        val bodyRate = BodyFrameTransform.deviceToBody(correctedDeviceValues)
+        val bodyRate = mountTransform.deviceToBody(correctedDeviceValues)
         val previousNs = lastGyroscopeNs
         lastGyroscopeNs = timestampNs
         if (previousNs == null || timestampNs <= previousNs) {

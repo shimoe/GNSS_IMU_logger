@@ -10,6 +10,7 @@ data class SessionMetadata(
     val sessionId: String,
     val status: SessionStatus,
     val mode: LogMode,
+    val deviceMount: String,
     val manufacturer: String,
     val model: String,
     val androidVersion: String,

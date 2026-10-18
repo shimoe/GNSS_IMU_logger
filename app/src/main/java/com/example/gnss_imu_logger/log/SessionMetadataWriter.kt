@@ -28,6 +28,7 @@ class SessionMetadataWriter(private val file: File) {
         appendLine("  \"session_id\": ${json(m.sessionId)},")
         appendLine("  \"status\": ${json(m.status.name.lowercase())},")
         appendLine("  \"mode\": ${json(m.mode.name.lowercase())},")
+        appendLine("  \"device_mount\": ${json(m.deviceMount.lowercase())},")
         appendLine("  \"device\": {")
         appendLine("    \"manufacturer\": ${json(m.manufacturer)},")
         appendLine("    \"model\": ${json(m.model)},")

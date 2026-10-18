@@ -102,7 +102,7 @@ class LoggerService : Service() {
             selectedDeviceMount = deviceMount
             startForeground(NOTIFICATION_ID,notification("センサーを初期化しています"))
             val docs=File(getExternalFilesDir(null),"Documents").apply{mkdirs()};val incomplete=IncompleteSessionScanner.scan(docs)
-            val s=SessionContext(this,mode);session=s;stateMachine=MeasurementStateMachine(s) {
+            val s=SessionContext(this, mode, deviceMount);session=s;stateMachine=MeasurementStateMachine(s) {
                 updateNotification(it)
                 publishSnapshot(latestSnapshot.copy(state = it))
             }
@@ -117,7 +117,7 @@ class LoggerService : Service() {
             imuCalibration=null
             correctedGyroscopeNormRadps=null
             correctedGyroscopeWriter=null
-            leanAngleEstimator=LeanAngleEstimator()
+            leanAngleEstimator=LeanAngleEstimator(deviceMount.transform())
             leanAngleLogWriter=null
             leanAngleSnapshot=null
             vehicleAttitudeEstimator=null
@@ -150,7 +150,7 @@ class LoggerService : Service() {
                         initialCalibration?.addAccelerometer(timestampNs, values)
                     )
                     leanAngleEstimator?.updateAcceleration(timestampNs, values)
-                    vehicleAttitudeEstimator?.updateAcceleration(values)
+                    vehicleAttitudeEstimator?.updateAcceleration(timestampNs, values)
                 },
                 onGyroscopeUpdated = { timestampNs, values ->
                     updateStationary(
@@ -196,6 +196,7 @@ class LoggerService : Service() {
     private fun updateStationary(status: StationaryStatus?) {
         if (status == null) return
         stationaryStatus = status
+        vehicleAttitudeEstimator?.updateStationary(status.stationary)
         handleCalibrationEvent(
             initialCalibration?.updateStationary(
                 status.stationary,
