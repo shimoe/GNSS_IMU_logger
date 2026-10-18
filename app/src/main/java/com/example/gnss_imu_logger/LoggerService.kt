@@ -14,6 +14,7 @@ import com.example.gnss_imu_logger.calibration.StationaryStatus
 import com.example.gnss_imu_logger.attitude.LeanAngleEstimator
 import com.example.gnss_imu_logger.attitude.LeanAngleLogWriter
 import com.example.gnss_imu_logger.attitude.LeanAngleSnapshot
+import com.example.gnss_imu_logger.attitude.LeanAngleParameters
 import com.example.gnss_imu_logger.attitude.DeviceMount
 import com.example.gnss_imu_logger.attitude.DeviceMountTransform
 import com.example.gnss_imu_logger.attitude.BodyVector
@@ -102,7 +103,8 @@ class LoggerService : Service() {
             selectedDeviceMount = deviceMount
             startForeground(NOTIFICATION_ID,notification("センサーを初期化しています"))
             val docs=File(getExternalFilesDir(null),"Documents").apply{mkdirs()};val incomplete=IncompleteSessionScanner.scan(docs)
-            val s=SessionContext(this, mode, deviceMount);session=s;stateMachine=MeasurementStateMachine(s) {
+            val leanParameters = LeanAngleParameters.DEFAULT
+            val s=SessionContext(this, mode, deviceMount, leanParameters);session=s;stateMachine=MeasurementStateMachine(s) {
                 updateNotification(it)
                 publishSnapshot(latestSnapshot.copy(state = it))
             }
@@ -117,7 +119,7 @@ class LoggerService : Service() {
             imuCalibration=null
             correctedGyroscopeNormRadps=null
             correctedGyroscopeWriter=null
-            leanAngleEstimator=LeanAngleEstimator(deviceMount.transform())
+            leanAngleEstimator=LeanAngleEstimator(deviceMount.transform(), leanParameters)
             leanAngleLogWriter=null
             leanAngleSnapshot=null
             vehicleAttitudeEstimator=null

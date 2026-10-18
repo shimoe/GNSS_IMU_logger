@@ -11,7 +11,8 @@ import kotlin.math.sqrt
  * 出力: 推定ロール、参照ロール、参照有効状態、角速度補正量
  */
 class LeanAngleEstimator(
-    private val mountTransform: DeviceMountTransform
+    private val mountTransform: DeviceMountTransform,
+    val parameters: LeanAngleParameters = LeanAngleParameters.DEFAULT
 ) {
     private val history = ArrayDeque<WindowSample>()
     private var filteredAcceleration: BodyVector? = null
@@ -44,7 +45,7 @@ class LeanAngleEstimator(
             return
         }
         val dtSec = (timestampNs - previousNs) / NS_PER_SEC
-        if (dtSec <= 0.0 || dtSec > MAX_ACCELERATION_INTERVAL_SEC) return
+        if (dtSec <= 0.0 || dtSec > parameters.maximumAccelerationIntervalSec) return
         val alpha = lowPassAlpha(dtSec)
         val previous = filteredAcceleration ?: body
         filteredAcceleration = BodyVector(
@@ -71,7 +72,7 @@ class LeanAngleEstimator(
             speed != null && oldSpeed != null && oldNs != null && timestampNs > oldNs
         ) {
             val dtSec = (timestampNs - oldNs) / NS_PER_SEC
-            if (dtSec in MINIMUM_SPEED_INTERVAL_SEC..MAXIMUM_SPEED_INTERVAL_SEC) {
+            if (dtSec in parameters.minimumSpeedIntervalSec..parameters.maximumSpeedIntervalSec) {
                 (speed - oldSpeed) / dtSec
             } else {
                 null
@@ -102,7 +103,7 @@ class LeanAngleEstimator(
         }
 
         val dtSec = (timestampNs - previousNs) / NS_PER_SEC
-        if (dtSec <= 0.0 || dtSec > MAX_GYROSCOPE_INTERVAL_SEC) {
+        if (dtSec <= 0.0 || dtSec > parameters.maximumGyroscopeIntervalSec) {
             clearReferenceWindow()
             return null
         }
@@ -112,7 +113,7 @@ class LeanAngleEstimator(
         filteredRollRateRadps += alpha * (bodyRate.x - filteredRollRateRadps)
         filteredYawRateRadps += alpha * (bodyRate.z - filteredYawRateRadps)
         val yawAcceleration = (filteredYawRateRadps - previousYawRate) / dtSec
-        filteredYawAccelerationRadps2 += DYNAMICS_FILTER_ALPHA *
+        filteredYawAccelerationRadps2 += parameters.dynamicsFilterAlpha *
             (yawAcceleration - filteredYawAccelerationRadps2)
         rawIntegratedRollRad += filteredRollRateRadps * dtSec
 
@@ -150,7 +151,7 @@ class LeanAngleEstimator(
             referenceConfidence = reference.confidence,
             windowDurationMs = (windowSec * MS_PER_SEC).toLong(),
             estimateValid = initialized && (
-                reference.source == ReferenceSource.HOLD || windowSec >= MINIMUM_WINDOW_SEC
+                reference.source == ReferenceSource.HOLD || windowSec >= parameters.minimumWindowSec
             )
         )
     }
@@ -195,7 +196,7 @@ class LeanAngleEstimator(
         }
 
         val steadyConfidence = centripetalReferenceConfidence(speed)
-        if (speed != null && steadyConfidence >= MINIMUM_REFERENCE_CONFIDENCE) {
+        if (speed != null && steadyConfidence >= parameters.minimumReferenceConfidence) {
             val centripetal = filteredYawRateRadps * speed
             return RollReference(
                 rollRad = atan2(centripetal, STANDARD_GRAVITY_MPS2),
@@ -217,22 +218,22 @@ class LeanAngleEstimator(
 
     /** 定常旋回の仮定を満たす範囲だけ向心加速度参照を許可する。 */
     private fun centripetalReferenceConfidence(speedMps: Double?): Double {
-        if (speedMps == null || speedMps < MINIMUM_CENTRIPETAL_SPEED_MPS) return 0.0
+        if (speedMps == null || speedMps < parameters.minimumCentripetalSpeedMps) return 0.0
         val speedChange = abs(speedAccelerationMps2 ?: return 0.0)
         val speedConfidence = linearConfidence(
             speedChange,
-            FULL_SPEED_ACCELERATION_MPS2,
-            MAXIMUM_SPEED_ACCELERATION_MPS2
+            parameters.fullSpeedAccelerationMps2,
+            parameters.maximumSpeedAccelerationMps2
         )
         val yawAccelerationConfidence = linearConfidence(
             abs(filteredYawAccelerationRadps2),
-            FULL_YAW_ACCELERATION_RADPS2,
-            MAXIMUM_YAW_ACCELERATION_RADPS2
+            parameters.fullYawAccelerationRadps2,
+            parameters.maximumYawAccelerationRadps2
         )
         val rollRateConfidence = linearConfidence(
             abs(filteredRollRateRadps),
-            FULL_ROLL_RATE_RADPS,
-            MAXIMUM_ROLL_RATE_RADPS
+            parameters.fullRollRateRadps,
+            parameters.maximumRollRateRadps
         )
         return speedConfidence * yawAccelerationConfidence * rollRateConfidence
     }
@@ -244,7 +245,7 @@ class LeanAngleEstimator(
                 acceleration.z * acceleration.z
         )
         val error = abs(norm - STANDARD_GRAVITY_MPS2)
-        return (1.0 - error / MAXIMUM_GRAVITY_ERROR_MPS2).coerceIn(0.0, 1.0)
+        return (1.0 - error / parameters.maximumGravityErrorMps2).coerceIn(0.0, 1.0)
     }
 
     private fun updateReferenceWindow(timestampNs: Long, reference: RollReference): Double {
@@ -265,13 +266,13 @@ class LeanAngleEstimator(
 
         val oldest = history.firstOrNull()
         val windowSec = oldest?.let { (timestampNs - it.timestampNs) / NS_PER_SEC } ?: 0.0
-        if (oldest != null && windowSec >= MINIMUM_WINDOW_SEC) {
+        if (oldest != null && windowSec >= parameters.minimumWindowSec) {
             referenceRateRadps =
                 (unwrappedReferenceRad - oldest.referenceRollRad) / windowSec
             integratedRateRadps =
                 (rawIntegratedRollRad - oldest.rawIntegratedRollRad) / windowSec
             val targetCorrection = referenceRateRadps - integratedRateRadps
-            driftCorrectionRadps += CORRECTION_FILTER_ALPHA *
+            driftCorrectionRadps += parameters.correctionFilterAlpha *
                 (targetCorrection - driftCorrectionRadps)
         }
         return windowSec
@@ -282,13 +283,13 @@ class LeanAngleEstimator(
         lastReferenceSource = ReferenceSource.HOLD
         referenceRateRadps = 0.0
         integratedRateRadps = 0.0
-        val decay = (dtSec / HOLD_CORRECTION_DECAY_SEC).coerceIn(0.0, 1.0)
+        val decay = (dtSec / parameters.holdCorrectionDecaySec).coerceIn(0.0, 1.0)
         driftCorrectionRadps += decay * (0.0 - driftCorrectionRadps)
     }
 
     private fun validSpeed(timestampNs: Long): Double? {
         val speedNs = latestSpeedNs ?: return null
-        if (timestampNs - speedNs > MAX_SPEED_AGE_NS) return null
+        if (timestampNs - speedNs > parameters.maximumSpeedAgeNs) return null
         return latestSpeedMps
     }
 
@@ -307,14 +308,14 @@ class LeanAngleEstimator(
     }
 
     private fun removeOldSamples(timestampNs: Long) {
-        val oldestAllowedNs = timestampNs - WINDOW_RETENTION_NS
+        val oldestAllowedNs = timestampNs - parameters.windowRetentionNs
         while (history.firstOrNull()?.timestampNs?.let { it < oldestAllowedNs } == true) {
             history.removeFirst()
         }
     }
 
     private fun lowPassAlpha(dtSec: Double): Double {
-        val timeConstantSec = 1.0 / (2.0 * PI * LOW_PASS_CUTOFF_HZ)
+        val timeConstantSec = 1.0 / (2.0 * PI * parameters.lowPassCutoffHz)
         return dtSec / (timeConstantSec + dtSec)
     }
 
@@ -346,26 +347,6 @@ class LeanAngleEstimator(
 
     companion object {
         private const val STANDARD_GRAVITY_MPS2 = 9.80665
-        private const val MAXIMUM_GRAVITY_ERROR_MPS2 = 1.0
-        private const val LOW_PASS_CUTOFF_HZ = 5.0
-        private const val MINIMUM_CENTRIPETAL_SPEED_MPS = 3.0
-        private const val MINIMUM_REFERENCE_CONFIDENCE = 0.2
-        private const val FULL_SPEED_ACCELERATION_MPS2 = 0.3
-        private const val MAXIMUM_SPEED_ACCELERATION_MPS2 = 1.5
-        private val FULL_YAW_ACCELERATION_RADPS2 = Math.toRadians(5.0)
-        private val MAXIMUM_YAW_ACCELERATION_RADPS2 = Math.toRadians(30.0)
-        private val FULL_ROLL_RATE_RADPS = Math.toRadians(10.0)
-        private val MAXIMUM_ROLL_RATE_RADPS = Math.toRadians(60.0)
-        private const val MINIMUM_WINDOW_SEC = 1.9
-        private const val WINDOW_RETENTION_NS = 2_100_000_000L
-        private const val MAX_SPEED_AGE_NS = 1_500_000_000L
-        private const val MINIMUM_SPEED_INTERVAL_SEC = 0.2
-        private const val MAXIMUM_SPEED_INTERVAL_SEC = 2.0
-        private const val MAX_ACCELERATION_INTERVAL_SEC = 0.1
-        private const val MAX_GYROSCOPE_INTERVAL_SEC = 0.1
-        private const val CORRECTION_FILTER_ALPHA = 0.05
-        private const val DYNAMICS_FILTER_ALPHA = 0.05
-        private const val HOLD_CORRECTION_DECAY_SEC = 2.0
         private const val NS_PER_SEC = 1_000_000_000.0
         private const val MS_PER_SEC = 1_000.0
     }

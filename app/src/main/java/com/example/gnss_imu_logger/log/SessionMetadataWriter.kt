@@ -29,6 +29,7 @@ class SessionMetadataWriter(private val file: File) {
         appendLine("  \"status\": ${json(m.status.name.lowercase())},")
         appendLine("  \"mode\": ${json(m.mode.name.lowercase())},")
         appendLine("  \"device_mount\": ${json(m.deviceMount.lowercase())},")
+        appendLeanAngleParameters(m)
         appendLine("  \"device\": {")
         appendLine("    \"manufacturer\": ${json(m.manufacturer)},")
         appendLine("    \"model\": ${json(m.model)},")
@@ -45,6 +46,33 @@ class SessionMetadataWriter(private val file: File) {
         appendLine("  \"error_message\": ${nullableJson(m.errorMessage)},")
         appendSummary(m)
         appendLine("}")
+    }
+
+    private fun StringBuilder.appendLeanAngleParameters(m: SessionMetadata) {
+        val value = m.leanAngleParameters
+        appendLine("  \"lean_angle_parameters\": {")
+        appendLine("    \"parameter_set_id\": ${json(value.parameterSetId)},")
+        appendLine("    \"low_pass_cutoff_hz\": ${value.lowPassCutoffHz},")
+        appendLine("    \"minimum_centripetal_speed_mps\": ${value.minimumCentripetalSpeedMps},")
+        appendLine("    \"minimum_reference_confidence\": ${value.minimumReferenceConfidence},")
+        appendLine("    \"full_speed_acceleration_mps2\": ${value.fullSpeedAccelerationMps2},")
+        appendLine("    \"maximum_speed_acceleration_mps2\": ${value.maximumSpeedAccelerationMps2},")
+        appendLine("    \"full_yaw_acceleration_radps2\": ${value.fullYawAccelerationRadps2},")
+        appendLine("    \"maximum_yaw_acceleration_radps2\": ${value.maximumYawAccelerationRadps2},")
+        appendLine("    \"full_roll_rate_radps\": ${value.fullRollRateRadps},")
+        appendLine("    \"maximum_roll_rate_radps\": ${value.maximumRollRateRadps},")
+        appendLine("    \"minimum_window_sec\": ${value.minimumWindowSec},")
+        appendLine("    \"window_retention_sec\": ${value.windowRetentionSec},")
+        appendLine("    \"maximum_speed_age_sec\": ${value.maximumSpeedAgeSec},")
+        appendLine("    \"minimum_speed_interval_sec\": ${value.minimumSpeedIntervalSec},")
+        appendLine("    \"maximum_speed_interval_sec\": ${value.maximumSpeedIntervalSec},")
+        appendLine("    \"maximum_acceleration_interval_sec\": ${value.maximumAccelerationIntervalSec},")
+        appendLine("    \"maximum_gyroscope_interval_sec\": ${value.maximumGyroscopeIntervalSec},")
+        appendLine("    \"correction_filter_alpha\": ${value.correctionFilterAlpha},")
+        appendLine("    \"dynamics_filter_alpha\": ${value.dynamicsFilterAlpha},")
+        appendLine("    \"hold_correction_decay_sec\": ${value.holdCorrectionDecaySec},")
+        appendLine("    \"maximum_gravity_error_mps2\": ${value.maximumGravityErrorMps2}")
+        appendLine("  },")
     }
 
     private fun StringBuilder.appendSummary(m: SessionMetadata) {
