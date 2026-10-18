@@ -197,6 +197,7 @@ class LoggerService : Service() {
         if (status == null) return
         stationaryStatus = status
         vehicleAttitudeEstimator?.updateStationary(status.stationary)
+        leanAngleEstimator?.updateStationary(status.stationary)
         handleCalibrationEvent(
             initialCalibration?.updateStationary(
                 status.stationary,
