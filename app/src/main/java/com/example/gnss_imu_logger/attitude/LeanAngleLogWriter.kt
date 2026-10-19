@@ -16,11 +16,13 @@ class LeanAngleLogWriter(file: File) : Closeable {
             "elapsed_realtime_ns", "roll_rad", "roll_deg",
             "reference_roll_rad", "measured_roll_rate_radps",
             "corrected_roll_rate_radps", "drift_correction_radps",
+            "angle_recovery_rate_radps",
             "reference_rate_radps", "integrated_rate_radps",
             "yaw_rate_radps", "yaw_acceleration_radps2",
             "speed_mps", "speed_acceleration_mps2",
             "centripetal_acceleration_mps2",
             "reference_source", "reference_valid", "reference_confidence",
+            "reference_state_duration_ms",
             "window_duration_ms", "estimate_valid"
         )
     )
@@ -35,6 +37,7 @@ class LeanAngleLogWriter(file: File) : Closeable {
                 value.measuredRollRateRadps,
                 value.correctedRollRateRadps,
                 value.driftCorrectionRadps,
+                value.angleRecoveryRateRadps,
                 value.referenceRateRadps,
                 value.integratedRateRadps,
                 value.yawRateRadps,
@@ -45,6 +48,7 @@ class LeanAngleLogWriter(file: File) : Closeable {
                 value.referenceSource.name,
                 value.referenceValid,
                 value.referenceConfidence,
+                value.referenceStateDurationMs,
                 value.windowDurationMs,
                 value.estimateValid
             )

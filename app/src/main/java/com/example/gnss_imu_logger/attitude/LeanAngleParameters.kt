@@ -12,6 +12,13 @@ data class LeanAngleParameters(
     val lowPassCutoffHz: Double,
     val minimumCentripetalSpeedMps: Double,
     val minimumReferenceConfidence: Double,
+    val centripetalEntrySpeedMps: Double,
+    val centripetalMaintainSpeedMps: Double,
+    val centripetalEntryConfidence: Double,
+    val centripetalMaintainConfidence: Double,
+    val centripetalEntryDurationSec: Double,
+    val centripetalExitDurationSec: Double,
+    val shortHoldDurationSec: Double,
     val fullSpeedAccelerationMps2: Double,
     val maximumSpeedAccelerationMps2: Double,
     val fullYawAccelerationRadps2: Double,
@@ -28,13 +35,19 @@ data class LeanAngleParameters(
     val correctionFilterAlpha: Double,
     val dynamicsFilterAlpha: Double,
     val holdCorrectionDecaySec: Double,
-    val maximumGravityErrorMps2: Double
+    val maximumGravityErrorMps2: Double,
+    val gravityRecoveryTimeSec: Double,
+    val maximumGravityRecoveryRateRadps: Double
 ) {
     init {
         require(parameterSetId.isNotBlank()) { "パラメーターセットIDは空にできません。" }
         require(lowPassCutoffHz > 0.0) { "ローパスカットオフ周波数は0 Hzより大きくしてください。" }
         require(minimumCentripetalSpeedMps >= 0.0) { "最低向心加速度参照速度は0 m/s以上にしてください。" }
         require(minimumReferenceConfidence in 0.0..1.0) { "最低参照信頼度は0から1の範囲にしてください。" }
+        require(centripetalEntrySpeedMps > centripetalMaintainSpeedMps) { "向心加速度参照の進入速度は維持速度より大きくしてください。" }
+        require(centripetalEntryConfidence > centripetalMaintainConfidence) { "向心加速度参照の進入信頼度は維持信頼度より大きくしてください。" }
+        require(centripetalEntryDurationSec > 0.0 && centripetalExitDurationSec > 0.0) { "参照状態の確認時間は0秒より大きくしてください。" }
+        require(shortHoldDurationSec >= centripetalExitDurationSec) { "短時間HOLDの履歴保持時間は離脱確認時間以上にしてください。" }
         require(fullSpeedAccelerationMps2 < maximumSpeedAccelerationMps2) {
             "速度変化量の最大信頼度しきい値は無効化しきい値未満にしてください。"
         }
@@ -54,6 +67,7 @@ data class LeanAngleParameters(
         require(dynamicsFilterAlpha in 0.0..1.0) { "運動状態フィルター係数は0から1の範囲にしてください。" }
         require(holdCorrectionDecaySec > 0.0) { "HOLD時の補正減衰時間は0秒より大きくしてください。" }
         require(maximumGravityErrorMps2 > 0.0) { "重力ノルム許容誤差は0 m/s^2より大きくしてください。" }
+        require(gravityRecoveryTimeSec > 0.0 && maximumGravityRecoveryRateRadps > 0.0) { "静止時の角度再収束設定は0より大きくしてください。" }
     }
 
     val windowRetentionNs: Long
@@ -65,10 +79,17 @@ data class LeanAngleParameters(
     companion object {
         /** 現在の実走評価に使用する既定値。 */
         val DEFAULT = LeanAngleParameters(
-            parameterSetId = "lean_default_v1",
+            parameterSetId = "lean_hysteresis_v2",
             lowPassCutoffHz = 5.0,
             minimumCentripetalSpeedMps = 3.0,
             minimumReferenceConfidence = 0.2,
+            centripetalEntrySpeedMps = 3.5,
+            centripetalMaintainSpeedMps = 2.5,
+            centripetalEntryConfidence = 0.30,
+            centripetalMaintainConfidence = 0.10,
+            centripetalEntryDurationSec = 0.5,
+            centripetalExitDurationSec = 0.3,
+            shortHoldDurationSec = 0.3,
             fullSpeedAccelerationMps2 = 0.3,
             maximumSpeedAccelerationMps2 = 1.5,
             fullYawAccelerationRadps2 = 5.0 * PI / 180.0,
@@ -85,7 +106,9 @@ data class LeanAngleParameters(
             correctionFilterAlpha = 0.05,
             dynamicsFilterAlpha = 0.05,
             holdCorrectionDecaySec = 2.0,
-            maximumGravityErrorMps2 = 1.0
+            maximumGravityErrorMps2 = 1.0,
+            gravityRecoveryTimeSec = 4.0,
+            maximumGravityRecoveryRateRadps = 5.0 * PI / 180.0
         )
 
         private const val NS_PER_SEC = 1_000_000_000.0

@@ -118,6 +118,13 @@ class SessionContext(
         lowPassCutoffHz = lowPassCutoffHz,
         minimumCentripetalSpeedMps = minimumCentripetalSpeedMps,
         minimumReferenceConfidence = minimumReferenceConfidence,
+        centripetalEntrySpeedMps = centripetalEntrySpeedMps,
+        centripetalMaintainSpeedMps = centripetalMaintainSpeedMps,
+        centripetalEntryConfidence = centripetalEntryConfidence,
+        centripetalMaintainConfidence = centripetalMaintainConfidence,
+        centripetalEntryDurationSec = centripetalEntryDurationSec,
+        centripetalExitDurationSec = centripetalExitDurationSec,
+        shortHoldDurationSec = shortHoldDurationSec,
         fullSpeedAccelerationMps2 = fullSpeedAccelerationMps2,
         maximumSpeedAccelerationMps2 = maximumSpeedAccelerationMps2,
         fullYawAccelerationRadps2 = fullYawAccelerationRadps2,
@@ -134,7 +141,9 @@ class SessionContext(
         correctionFilterAlpha = correctionFilterAlpha,
         dynamicsFilterAlpha = dynamicsFilterAlpha,
         holdCorrectionDecaySec = holdCorrectionDecaySec,
-        maximumGravityErrorMps2 = maximumGravityErrorMps2
+        maximumGravityErrorMps2 = maximumGravityErrorMps2,
+        gravityRecoveryTimeSec = gravityRecoveryTimeSec,
+        maximumGravityRecoveryRateRadps = maximumGravityRecoveryRateRadps
     )
 
     companion object {

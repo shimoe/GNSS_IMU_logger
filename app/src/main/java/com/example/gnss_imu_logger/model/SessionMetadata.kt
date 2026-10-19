@@ -36,6 +36,13 @@ data class LeanAngleParameterMetadata(
     val lowPassCutoffHz: Double,
     val minimumCentripetalSpeedMps: Double,
     val minimumReferenceConfidence: Double,
+    val centripetalEntrySpeedMps: Double,
+    val centripetalMaintainSpeedMps: Double,
+    val centripetalEntryConfidence: Double,
+    val centripetalMaintainConfidence: Double,
+    val centripetalEntryDurationSec: Double,
+    val centripetalExitDurationSec: Double,
+    val shortHoldDurationSec: Double,
     val fullSpeedAccelerationMps2: Double,
     val maximumSpeedAccelerationMps2: Double,
     val fullYawAccelerationRadps2: Double,
@@ -52,5 +59,7 @@ data class LeanAngleParameterMetadata(
     val correctionFilterAlpha: Double,
     val dynamicsFilterAlpha: Double,
     val holdCorrectionDecaySec: Double,
-    val maximumGravityErrorMps2: Double
+    val maximumGravityErrorMps2: Double,
+    val gravityRecoveryTimeSec: Double,
+    val maximumGravityRecoveryRateRadps: Double
 )

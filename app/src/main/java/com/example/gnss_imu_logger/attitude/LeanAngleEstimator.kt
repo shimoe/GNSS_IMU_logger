@@ -32,6 +32,12 @@ class LeanAngleEstimator(
     private var referenceRateRadps = 0.0
     private var integratedRateRadps = 0.0
     private var lastReferenceSource = ReferenceSource.HOLD
+    private var activeReferenceSource = ReferenceSource.HOLD
+    private var entryCandidateStartedNs: Long? = null
+    private var exitCandidateStartedNs: Long? = null
+    private var holdStartedNs: Long? = null
+    private var sourceStartedNs: Long? = null
+    private var angleRecoveryRateRadps = 0.0
     private var initialized = false
     private var stationary = false
     private val statistics = LeanAngleStatistics()
@@ -122,15 +128,23 @@ class LeanAngleEstimator(
         val windowSec = if (reference.source != ReferenceSource.HOLD) {
             updateReferenceWindow(timestampNs, reference)
         } else {
-            holdCorrection(dtSec)
+            holdCorrection(timestampNs, dtSec)
             0.0
         }
 
+        angleRecoveryRateRadps = 0.0
         if (!initialized && reference.source != ReferenceSource.HOLD) {
-            estimatedRollRad = unwrappedReferenceRad
+            estimatedRollRad = reference.rollRad
             initialized = true
         } else {
-            estimatedRollRad += (filteredRollRateRadps + driftCorrectionRadps) * dtSec
+            if (reference.source == ReferenceSource.GRAVITY && initialized) {
+                val errorRad = normalizeAngle(reference.rollRad - normalizeAngle(estimatedRollRad))
+                angleRecoveryRateRadps = (errorRad / parameters.gravityRecoveryTimeSec).coerceIn(
+                    -parameters.maximumGravityRecoveryRateRadps,
+                    parameters.maximumGravityRecoveryRateRadps
+                )
+            }
+            estimatedRollRad += (filteredRollRateRadps + driftCorrectionRadps + angleRecoveryRateRadps) * dtSec
         }
 
         val snapshot = LeanAngleSnapshot(
@@ -138,8 +152,9 @@ class LeanAngleEstimator(
             rollRad = normalizeAngle(estimatedRollRad),
             referenceRollRad = normalizeAngle(unwrappedReferenceRad),
             measuredRollRateRadps = filteredRollRateRadps,
-            correctedRollRateRadps = filteredRollRateRadps + driftCorrectionRadps,
+            correctedRollRateRadps = filteredRollRateRadps + driftCorrectionRadps + angleRecoveryRateRadps,
             driftCorrectionRadps = driftCorrectionRadps,
+            angleRecoveryRateRadps = angleRecoveryRateRadps,
             referenceRateRadps = referenceRateRadps,
             integratedRateRadps = integratedRateRadps,
             yawRateRadps = filteredYawRateRadps,
@@ -150,6 +165,7 @@ class LeanAngleEstimator(
             referenceSource = reference.source,
             referenceValid = reference.source != ReferenceSource.HOLD,
             referenceConfidence = reference.confidence,
+            referenceStateDurationMs = sourceStartedNs?.let { (timestampNs - it) / 1_000_000L } ?: 0L,
             windowDurationMs = (windowSec * MS_PER_SEC).toLong(),
             estimateValid = initialized && (
                 reference.source == ReferenceSource.HOLD || windowSec >= parameters.minimumWindowSec
@@ -187,6 +203,12 @@ class LeanAngleEstimator(
         referenceRateRadps = 0.0
         integratedRateRadps = 0.0
         lastReferenceSource = ReferenceSource.HOLD
+        activeReferenceSource = ReferenceSource.HOLD
+        entryCandidateStartedNs = null
+        exitCandidateStartedNs = null
+        holdStartedNs = null
+        sourceStartedNs = null
+        angleRecoveryRateRadps = 0.0
         initialized = false
         stationary = false
         statistics.reset()
@@ -194,43 +216,57 @@ class LeanAngleEstimator(
 
     private fun calculateReference(timestampNs: Long): RollReference {
         val speed = validSpeed(timestampNs)
-        if (stationary) {
-            val acceleration = filteredAcceleration
-            if (acceleration != null && gravityReferenceConfidence(acceleration) > 0.0) {
-                return RollReference(
-                    rollRad = atan2(acceleration.y, acceleration.z),
-                    speedMps = speed,
-                    centripetalAccelerationMps2 = 0.0,
-                    source = ReferenceSource.GRAVITY,
-                    confidence = gravityReferenceConfidence(acceleration)
-                )
+        val acceleration = filteredAcceleration
+        if (stationary && acceleration != null) {
+            val confidence = gravityReferenceConfidence(acceleration)
+            if (confidence > 0.0) {
+                setSource(ReferenceSource.GRAVITY, timestampNs)
+                return RollReference(atan2(acceleration.y, acceleration.z), speed, 0.0, ReferenceSource.GRAVITY, confidence)
             }
         }
-
-        val steadyConfidence = centripetalReferenceConfidence(speed)
-        if (speed != null && steadyConfidence >= parameters.minimumReferenceConfidence) {
+        val confidence = centripetalReferenceConfidence(speed)
+        updateCentripetalState(timestampNs, speed, confidence)
+        if (activeReferenceSource == ReferenceSource.CENTRIPETAL && speed != null) {
             val centripetal = filteredYawRateRadps * speed
-            return RollReference(
-                rollRad = atan2(centripetal, STANDARD_GRAVITY_MPS2),
-                speedMps = speed,
-                centripetalAccelerationMps2 = centripetal,
-                source = ReferenceSource.CENTRIPETAL,
-                confidence = steadyConfidence
-            )
+            return RollReference(atan2(centripetal, STANDARD_GRAVITY_MPS2), speed, centripetal, ReferenceSource.CENTRIPETAL, confidence)
         }
-
-        return RollReference(
-            rollRad = normalizeAngle(unwrappedReferenceRad),
-            speedMps = speed,
-            centripetalAccelerationMps2 = 0.0,
-            source = ReferenceSource.HOLD,
-            confidence = 0.0
-        )
+        setSource(ReferenceSource.HOLD, timestampNs)
+        return RollReference(normalizeAngle(unwrappedReferenceRad), speed, 0.0, ReferenceSource.HOLD, 0.0)
     }
 
-    /** 定常旋回の仮定を満たす範囲だけ向心加速度参照を許可する。 */
+    /** 速度と信頼度へ時間ヒステリシスを適用して定常旋回状態を更新する。 */
+    private fun updateCentripetalState(timestampNs: Long, speedMps: Double?, confidence: Double) {
+        if (activeReferenceSource == ReferenceSource.GRAVITY && !stationary) setSource(ReferenceSource.HOLD, timestampNs)
+        if (activeReferenceSource == ReferenceSource.CENTRIPETAL) {
+            val maintain = speedMps != null && speedMps >= parameters.centripetalMaintainSpeedMps &&
+                confidence >= parameters.centripetalMaintainConfidence
+            if (maintain) { exitCandidateStartedNs = null; return }
+            val startedNs = exitCandidateStartedNs ?: timestampNs.also { exitCandidateStartedNs = it }
+            if ((timestampNs - startedNs) / NS_PER_SEC >= parameters.centripetalExitDurationSec) {
+                setSource(ReferenceSource.HOLD, timestampNs)
+                exitCandidateStartedNs = null
+            }
+            return
+        }
+        val enter = speedMps != null && speedMps >= parameters.centripetalEntrySpeedMps &&
+            confidence >= parameters.centripetalEntryConfidence
+        if (!enter) { entryCandidateStartedNs = null; return }
+        val startedNs = entryCandidateStartedNs ?: timestampNs.also { entryCandidateStartedNs = it }
+        if ((timestampNs - startedNs) / NS_PER_SEC >= parameters.centripetalEntryDurationSec) {
+            setSource(ReferenceSource.CENTRIPETAL, timestampNs)
+            entryCandidateStartedNs = null
+        }
+    }
+
+    private fun setSource(source: ReferenceSource, timestampNs: Long) {
+        if (activeReferenceSource != source || sourceStartedNs == null) sourceStartedNs = timestampNs
+        activeReferenceSource = source
+        if (source != ReferenceSource.HOLD) holdStartedNs = null
+    }
+
+    /** 定常旋回の仮定を満たす範囲から向心加速度参照の信頼度を求める。 */
     private fun centripetalReferenceConfidence(speedMps: Double?): Double {
-        if (speedMps == null || speedMps < parameters.minimumCentripetalSpeedMps) return 0.0
+        if (speedMps == null || speedMps < parameters.centripetalMaintainSpeedMps) return 0.0
         val speedChange = abs(speedAccelerationMps2 ?: return 0.0)
         val speedConfidence = linearConfidence(
             speedChange,
@@ -261,7 +297,8 @@ class LeanAngleEstimator(
     }
 
     private fun updateReferenceWindow(timestampNs: Long, reference: RollReference): Double {
-        if (reference.source != lastReferenceSource) {
+        holdStartedNs = null
+        if (reference.source != lastReferenceSource && lastReferenceSource != ReferenceSource.HOLD) {
             clearReferenceWindow()
             previousReferenceRad = null
             lastReferenceSource = reference.source
@@ -283,16 +320,20 @@ class LeanAngleEstimator(
                 (unwrappedReferenceRad - oldest.referenceRollRad) / windowSec
             integratedRateRadps =
                 (rawIntegratedRollRad - oldest.rawIntegratedRollRad) / windowSec
-            val targetCorrection = referenceRateRadps - integratedRateRadps
+            val targetCorrection = reference.confidence * (referenceRateRadps - integratedRateRadps)
             driftCorrectionRadps += parameters.correctionFilterAlpha *
                 (targetCorrection - driftCorrectionRadps)
         }
         return windowSec
     }
 
-    private fun holdCorrection(dtSec: Double) {
-        clearReferenceWindow()
-        lastReferenceSource = ReferenceSource.HOLD
+    private fun holdCorrection(timestampNs: Long, dtSec: Double) {
+        val startedNs = holdStartedNs ?: timestampNs.also { holdStartedNs = it }
+        if ((timestampNs - startedNs) / NS_PER_SEC > parameters.shortHoldDurationSec) {
+            clearReferenceWindow()
+            previousReferenceRad = null
+            lastReferenceSource = ReferenceSource.HOLD
+        }
         referenceRateRadps = 0.0
         integratedRateRadps = 0.0
         val decay = (dtSec / parameters.holdCorrectionDecaySec).coerceIn(0.0, 1.0)
@@ -377,6 +418,7 @@ data class LeanAngleSnapshot(
     val measuredRollRateRadps: Double,
     val correctedRollRateRadps: Double,
     val driftCorrectionRadps: Double,
+    val angleRecoveryRateRadps: Double,
     val referenceRateRadps: Double,
     val integratedRateRadps: Double,
     val yawRateRadps: Double,
@@ -387,6 +429,7 @@ data class LeanAngleSnapshot(
     val referenceSource: ReferenceSource,
     val referenceValid: Boolean,
     val referenceConfidence: Double,
+    val referenceStateDurationMs: Long,
     val windowDurationMs: Long,
     val estimateValid: Boolean
 )
