@@ -34,6 +34,7 @@ class LeanAngleEstimator(
     private var lastReferenceSource = ReferenceSource.HOLD
     private var initialized = false
     private var stationary = false
+    private val statistics = LeanAngleStatistics()
 
     @Synchronized
     fun updateAcceleration(timestampNs: Long, deviceValues: FloatArray) {
@@ -132,7 +133,7 @@ class LeanAngleEstimator(
             estimatedRollRad += (filteredRollRateRadps + driftCorrectionRadps) * dtSec
         }
 
-        return LeanAngleSnapshot(
+        val snapshot = LeanAngleSnapshot(
             elapsedRealtimeNs = timestampNs,
             rollRad = normalizeAngle(estimatedRollRad),
             referenceRollRad = normalizeAngle(unwrappedReferenceRad),
@@ -154,7 +155,17 @@ class LeanAngleEstimator(
                 reference.source == ReferenceSource.HOLD || windowSec >= parameters.minimumWindowSec
             )
         )
+        statistics.record(snapshot)
+        return snapshot
     }
+
+    /**
+     * セッション終了時に参照状態と補正量の統計を返す。
+     * 入力: なし
+     * 出力: LeanAngleSummary
+     */
+    @Synchronized
+    fun summary(): LeanAngleSummary = statistics.summary()
 
     @Synchronized
     fun reset() {
@@ -178,6 +189,7 @@ class LeanAngleEstimator(
         lastReferenceSource = ReferenceSource.HOLD
         initialized = false
         stationary = false
+        statistics.reset()
     }
 
     private fun calculateReference(timestampNs: Long): RollReference {
@@ -378,3 +390,112 @@ data class LeanAngleSnapshot(
     val windowDurationMs: Long,
     val estimateValid: Boolean
 )
+
+
+/**
+ * 単車ロール推定の参照状態と角速度補正量のセッション統計。
+ * 入力: LeanAngleSnapshot
+ * 出力: session.jsonのstatistics.lean_angle
+ */
+data class LeanAngleSummary(
+    val totalCount: Long,
+    val validCount: Long,
+    val gravityCount: Long,
+    val centripetalCount: Long,
+    val holdCount: Long,
+    val gravityDurationMs: Long,
+    val centripetalDurationMs: Long,
+    val holdDurationMs: Long,
+    val referenceValidRatio: Double,
+    val meanReferenceConfidence: Double,
+    val maximumAbsoluteDriftCorrectionRadps: Double,
+    val driftCorrectionRmsRadps: Double
+)
+
+private class LeanAngleStatistics {
+    private var totalCount = 0L
+    private var validCount = 0L
+    private var gravityCount = 0L
+    private var centripetalCount = 0L
+    private var holdCount = 0L
+    private var gravityDurationNs = 0L
+    private var centripetalDurationNs = 0L
+    private var holdDurationNs = 0L
+    private var referenceConfidenceSum = 0.0
+    private var absoluteDriftCorrectionMaximumRadps = 0.0
+    private var driftCorrectionSquareSum = 0.0
+    private var previousTimestampNs: Long? = null
+    private var previousSource: ReferenceSource? = null
+
+    fun record(value: LeanAngleSnapshot) {
+        val previousNs = previousTimestampNs
+        val source = previousSource
+        if (previousNs != null && source != null && value.elapsedRealtimeNs > previousNs) {
+            val durationNs = value.elapsedRealtimeNs - previousNs
+            if (durationNs <= MAXIMUM_STATISTICS_INTERVAL_NS) when (source) {
+                ReferenceSource.GRAVITY -> gravityDurationNs += durationNs
+                ReferenceSource.CENTRIPETAL -> centripetalDurationNs += durationNs
+                ReferenceSource.HOLD -> holdDurationNs += durationNs
+            }
+        }
+        totalCount += 1
+        if (value.referenceValid) validCount += 1
+        when (value.referenceSource) {
+            ReferenceSource.GRAVITY -> gravityCount += 1
+            ReferenceSource.CENTRIPETAL -> centripetalCount += 1
+            ReferenceSource.HOLD -> holdCount += 1
+        }
+        referenceConfidenceSum += value.referenceConfidence
+        val absoluteCorrection = kotlin.math.abs(value.driftCorrectionRadps)
+        absoluteDriftCorrectionMaximumRadps = maxOf(
+            absoluteDriftCorrectionMaximumRadps,
+            absoluteCorrection
+        )
+        driftCorrectionSquareSum += value.driftCorrectionRadps * value.driftCorrectionRadps
+        previousTimestampNs = value.elapsedRealtimeNs
+        previousSource = value.referenceSource
+    }
+
+    fun summary(): LeanAngleSummary {
+        val count = totalCount.coerceAtLeast(1L).toDouble()
+        return LeanAngleSummary(
+            totalCount = totalCount,
+            validCount = validCount,
+            gravityCount = gravityCount,
+            centripetalCount = centripetalCount,
+            holdCount = holdCount,
+            gravityDurationMs = gravityDurationNs / NS_PER_MS,
+            centripetalDurationMs = centripetalDurationNs / NS_PER_MS,
+            holdDurationMs = holdDurationNs / NS_PER_MS,
+            referenceValidRatio = if (totalCount > 0) validCount.toDouble() / totalCount else 0.0,
+            meanReferenceConfidence = if (totalCount > 0) referenceConfidenceSum / totalCount else 0.0,
+            maximumAbsoluteDriftCorrectionRadps = absoluteDriftCorrectionMaximumRadps,
+            driftCorrectionRmsRadps = if (totalCount > 0) {
+                kotlin.math.sqrt(driftCorrectionSquareSum / count)
+            } else {
+                0.0
+            }
+        )
+    }
+
+    fun reset() {
+        totalCount = 0L
+        validCount = 0L
+        gravityCount = 0L
+        centripetalCount = 0L
+        holdCount = 0L
+        gravityDurationNs = 0L
+        centripetalDurationNs = 0L
+        holdDurationNs = 0L
+        referenceConfidenceSum = 0.0
+        absoluteDriftCorrectionMaximumRadps = 0.0
+        driftCorrectionSquareSum = 0.0
+        previousTimestampNs = null
+        previousSource = null
+    }
+
+    companion object {
+        private const val NS_PER_MS = 1_000_000L
+        private const val MAXIMUM_STATISTICS_INTERVAL_NS = 100_000_000L
+    }
+}

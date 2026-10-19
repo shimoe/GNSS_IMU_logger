@@ -104,7 +104,32 @@ class SessionMetadataWriter(private val file: File) {
         appendLine("      \"total_degraded_duration_ms\": ${summary.measurement.totalDegradedDurationMs}")
         appendLine("    },")
         appendCalibration(summary.calibration)
+        appendLine(",")
+        appendLeanAngleSummary(summary.leanAngle)
         appendLine("  }")
+    }
+
+    private fun StringBuilder.appendLeanAngleSummary(
+        value: com.example.gnss_imu_logger.attitude.LeanAngleSummary?
+    ) {
+        if (value == null) {
+            appendLine("    \"lean_angle\": null")
+            return
+        }
+        appendLine("    \"lean_angle\": {")
+        appendLine("      \"total_count\": ${value.totalCount},")
+        appendLine("      \"valid_count\": ${value.validCount},")
+        appendLine("      \"gravity_count\": ${value.gravityCount},")
+        appendLine("      \"centripetal_count\": ${value.centripetalCount},")
+        appendLine("      \"hold_count\": ${value.holdCount},")
+        appendLine("      \"gravity_duration_ms\": ${value.gravityDurationMs},")
+        appendLine("      \"centripetal_duration_ms\": ${value.centripetalDurationMs},")
+        appendLine("      \"hold_duration_ms\": ${value.holdDurationMs},")
+        appendLine("      \"reference_valid_ratio\": ${value.referenceValidRatio},")
+        appendLine("      \"mean_reference_confidence\": ${value.meanReferenceConfidence},")
+        appendLine("      \"maximum_absolute_drift_correction_radps\": ${value.maximumAbsoluteDriftCorrectionRadps},")
+        appendLine("      \"drift_correction_rms_radps\": ${value.driftCorrectionRmsRadps}")
+        appendLine("    }")
     }
 
     private fun StringBuilder.appendCalibration(value: CalibrationResult?) {

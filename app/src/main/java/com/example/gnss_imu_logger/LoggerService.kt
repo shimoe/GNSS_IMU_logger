@@ -379,6 +379,7 @@ class LoggerService : Service() {
             measurementTimeline?.summary(qualitySummary)
         } else null
         val i=imuCollector?.snapshot();val g=gnssCollector?.snapshot();val free=storageMonitor?.freeBytes()?:0L;storageMonitor?.close();storageMonitor=null
+        val leanSummary = leanAngleEstimator?.summary()
         runCatching{vehicleAttitudeLogWriter?.close();vehicleAttitudeLogWriter=null;leanAngleLogWriter?.close();leanAngleLogWriter=null;correctedGyroscopeWriter?.close();correctedGyroscopeWriter=null;environmentCollector?.close();environmentCollector=null;gnssCollector?.close();gnssCollector=null;imuCollector?.close();imuCollector=null;val s=session;if(s!=null&&i!=null&&g!=null)s.complete(SessionSummary(
                 i.accelerometer.toSummary(),
                 i.gyroscope.toSummary(),
@@ -386,7 +387,8 @@ class LoggerService : Service() {
                 dirBytes(s.directory),
                 free,
                 requireNotNull(measurementSummary) { "計測状態統計を確定できませんでした" },
-                initialCalibration?.snapshot()?.result
+                initialCalibration?.snapshot()?.result,
+                leanSummary
             ))}.onFailure{e->runCatching{session?.fail("計測の終了処理に失敗しました: ${e.message}")}}
         stateMachine?.transitionTo(MeasurementState.IDLE,"計測停止処理が完了しました");runCatching{session?.close()};session=null
         stateMachine=null

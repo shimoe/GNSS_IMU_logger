@@ -1,5 +1,6 @@
 package com.example.gnss_imu_logger.model
 
+import com.example.gnss_imu_logger.attitude.LeanAngleSummary
 import com.example.gnss_imu_logger.calibration.CalibrationResult
 import com.example.gnss_imu_logger.measurement.MeasurementStateSummary
 
@@ -31,5 +32,6 @@ data class SessionSummary(
     val totalBytes: Long,
     val freeBytesAtEnd: Long,
     val measurement: MeasurementStateSummary,
-    val calibration: CalibrationResult?
+    val calibration: CalibrationResult?,
+    val leanAngle: LeanAngleSummary?
 )
