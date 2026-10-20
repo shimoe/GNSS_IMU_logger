@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.gnss_imu_logger.navigation.OfflineNavigationProcessor
 import com.example.gnss_imu_logger.playback.PlaybackController
 import com.example.gnss_imu_logger.playback.PlaybackSession
 import com.example.gnss_imu_logger.playback.PlaybackState
@@ -149,10 +150,28 @@ private fun PlaybackDetailScreen(
     var state by remember(item.sessionId) { mutableStateOf<PlaybackState?>(null) }
     var loading by remember(item.sessionId) { mutableStateOf(true) }
     var errorMessage by remember(item.sessionId) { mutableStateOf<String?>(null) }
+    var navigationMessage by remember(item.sessionId) { mutableStateOf<String?>(null) }
+    var navigationWarning by remember(item.sessionId) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(item.sessionId) {
         loading = true
         errorMessage = null
+        navigationMessage = "オフラインナビゲーション解析中"
+        navigationWarning = null
+        val navigationResult = runCatching {
+            withContext(Dispatchers.IO) {
+                OfflineNavigationProcessor().process(item.directory)
+            }
+        }
+        navigationResult.onSuccess { result ->
+            navigationMessage =
+                "オフライン解析完了: 予測${result.predictionSampleCount}件、" +
+                    "GNSS残差${result.gnssResidualCount}件"
+        }.onFailure {
+            navigationMessage = null
+            navigationWarning =
+                "オフライン解析を実行できませんでした: ${it.message}"
+        }
         runCatching {
             withContext(Dispatchers.IO) {
                 SessionLogReader().read(item)
@@ -184,6 +203,12 @@ private fun PlaybackDetailScreen(
     ) {
         Button(onClick = onBack) { Text("セッション一覧へ戻る") }
         Text(item.sessionId, style = MaterialTheme.typography.headlineSmall)
+        navigationMessage?.let {
+            Text(it, color = MaterialTheme.colorScheme.primary)
+        }
+        navigationWarning?.let {
+            Text(it, color = MaterialTheme.colorScheme.error)
+        }
 
         when {
             loading -> CircularProgressIndicator()
