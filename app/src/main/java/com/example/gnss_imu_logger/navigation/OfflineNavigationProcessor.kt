@@ -34,6 +34,9 @@ class OfflineNavigationProcessor {
         NavigationAttitudePredictionWriter(sessionDirectory).write(
             result.attitudePredictions
         )
+        NavigationHeadingDirectionWriter(sessionDirectory).write(
+            result.headingDirections
+        )
         return OfflineNavigationProcessResult(
             predictionSampleCount = result.prediction.samples.size,
             gnssResidualCount = result.prediction.gnssResiduals.size,

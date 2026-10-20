@@ -51,6 +51,8 @@ class GnssAidedOfflineNavigationPredictor(
         val updates = mutableListOf<NavigationMeasurementUpdateRecord>()
         val gravityUpdates = mutableListOf<NavigationGravityUpdateRecord>()
         val attitudePredictions = mutableListOf<NavigationAttitudePredictionRecord>()
+        val headingDirections = mutableListOf<NavigationHeadingDirectionRecord>()
+        val headingDirectionTracker = NavigationHeadingDirectionTracker()
         var previousGravityUpdateNs: Long? = null
         var consecutivePositionRejections = 0
         var consecutiveVelocityRejections = 0
@@ -212,6 +214,19 @@ class GnssAidedOfflineNavigationPredictor(
                             kotlin.math.abs(oppositeHeadingInnovationRad) <
                                 kotlin.math.abs(headingResult.innovationRad)
                         } else null
+                        val horizontalSpeedMps = event.update.velocityEnuMps?.let {
+                            sqrt(it.eastMps * it.eastMps + it.northMps * it.northMps)
+                        }
+                        val angularRateNormRadps = angularRateBodyRadps?.let {
+                            sqrt(it.x * it.x + it.y * it.y + it.z * it.z)
+                        }
+                        headingDirections += headingDirectionTracker.update(
+                            elapsedRealtimeNs = event.elapsedRealtimeNs,
+                            speedMps = horizontalSpeedMps,
+                            angularRateNormRadps = angularRateNormRadps,
+                            regularInnovationRad = headingResult.innovationRad,
+                            oppositeInnovationRad = oppositeHeadingInnovationRad
+                        )
                         val eskfHeadingInnovationStdRad = eskfHeadingMeasurementStdRad?.let {
                             sqrt(eskfHeadingStdBeforeRad * eskfHeadingStdBeforeRad + it * it)
                         }
@@ -281,7 +296,8 @@ class GnssAidedOfflineNavigationPredictor(
             prediction = OfflineNavigationPredictionResult(samples, residuals),
             measurementUpdates = updates,
             gravityUpdates = gravityUpdates,
-            attitudePredictions = attitudePredictions
+            attitudePredictions = attitudePredictions,
+            headingDirections = headingDirections
         )
     }
 
@@ -470,7 +486,8 @@ data class GnssAidedNavigationResult(
     val prediction: OfflineNavigationPredictionResult,
     val measurementUpdates: List<NavigationMeasurementUpdateRecord>,
     val gravityUpdates: List<NavigationGravityUpdateRecord>,
-    val attitudePredictions: List<NavigationAttitudePredictionRecord>
+    val attitudePredictions: List<NavigationAttitudePredictionRecord>,
+    val headingDirections: List<NavigationHeadingDirectionRecord>
 )
 
 data class NavigationAttitudePredictionRecord(
