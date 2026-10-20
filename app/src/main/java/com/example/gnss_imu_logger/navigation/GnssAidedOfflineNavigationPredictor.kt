@@ -164,6 +164,15 @@ class GnssAidedOfflineNavigationPredictor(
                         val eskfHeadingMeasurementStdRad = event.update.bearingAccuracyRad?.let {
                             maxOf(it, headingParameters.minimumBearingAccuracyRad)
                         }
+                        val oppositeHeadingInnovationRad = headingResult.innovationRad?.let {
+                            wrapHeadingAngle(it + kotlin.math.PI)
+                        }
+                        val oppositeHeadingIsCloser = if (
+                            headingResult.innovationRad != null && oppositeHeadingInnovationRad != null
+                        ) {
+                            kotlin.math.abs(oppositeHeadingInnovationRad) <
+                                kotlin.math.abs(headingResult.innovationRad)
+                        } else null
                         val eskfHeadingInnovationStdRad = eskfHeadingMeasurementStdRad?.let {
                             sqrt(eskfHeadingStdBeforeRad * eskfHeadingStdBeforeRad + it * it)
                         }
@@ -204,6 +213,8 @@ class GnssAidedOfflineNavigationPredictor(
                             eskfHeadingStdAfterRad = eskfHeadingStdAfterRad,
                             eskfHeadingMeasurementStdRad = eskfHeadingMeasurementStdRad,
                             eskfHeadingInnovationStdRad = eskfHeadingInnovationStdRad,
+                            oppositeHeadingInnovationRad = oppositeHeadingInnovationRad,
+                            oppositeHeadingIsCloser = oppositeHeadingIsCloser,
                             eskfNormalizedHeadingInnovation = if (
                                 headingResult.innovationRad != null &&
                                 eskfHeadingInnovationStdRad != null &&
@@ -218,7 +229,12 @@ class GnssAidedOfflineNavigationPredictor(
                     }
                 }
                 if (state.elapsedRealtimeNs >= nextOutputNs) {
-                    samples += state.toSample(variance, headingVarianceRad2, eskfCovariance)
+                    samples += state.toSample(
+                        variance = variance,
+                        headingVarianceRad2 = headingVarianceRad2,
+                        eskfCovariance = eskfCovariance,
+                        angularRateBodyRadps = angularRateBodyRadps?.minus(state.gyroscopeBiasRadps)
+                    )
                     nextOutputNs = state.elapsedRealtimeNs + outputIntervalNs
                 }
             }
@@ -383,13 +399,15 @@ class GnssAidedOfflineNavigationPredictor(
     private fun NavigationState.toSample(
         variance: NavigationAxisVariance,
         headingVarianceRad2: Double,
-        eskfCovariance: NavigationEskfCovariance
+        eskfCovariance: NavigationEskfCovariance,
+        angularRateBodyRadps: BodyVector?
     ) = NavigationPredictionSample(
         elapsedRealtimeNs = elapsedRealtimeNs,
         positionEnuM = positionEnuM,
         velocityEnuMps = velocityEnuMps,
         attitudeBodyToEnu = attitudeBodyToEnu,
         accelerationEnuMps2 = accelerationEnuMps2,
+        angularRateBodyRadps = angularRateBodyRadps,
         status = status,
         uncertainty = NavigationPredictionUncertainty.from(
             variance = variance,
@@ -449,9 +467,19 @@ data class NavigationMeasurementUpdateRecord(
     val eskfHeadingStdAfterRad: Double?,
     val eskfHeadingMeasurementStdRad: Double?,
     val eskfHeadingInnovationStdRad: Double?,
+    val oppositeHeadingInnovationRad: Double?,
+    val oppositeHeadingIsCloser: Boolean?,
     val eskfNormalizedHeadingInnovation: Double?,
     val rejectionReason: NavigationMeasurementRejectionReason?
 )
+
+/** 角度[rad]を-piからpiへ正規化する。 */
+private fun wrapHeadingAngle(angleRad: Double): Double {
+    var wrapped = angleRad
+    while (wrapped > kotlin.math.PI) wrapped -= 2.0 * kotlin.math.PI
+    while (wrapped < -kotlin.math.PI) wrapped += 2.0 * kotlin.math.PI
+    return wrapped
+}
 
 private operator fun BodyVector.minus(other: BodyVector) = BodyVector(
     x = x - other.x,

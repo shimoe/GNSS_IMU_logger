@@ -1,11 +1,17 @@
 package com.example.gnss_imu_logger.navigation
 
+import com.example.gnss_imu_logger.attitude.BodyVector
+
 import java.io.BufferedWriter
 import java.io.Closeable
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStreamWriter
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.tan
 
 /**
  * 純粋IMU予測とGNSS残差を解析用CSVへ保存する。
@@ -35,7 +41,11 @@ class OfflineNavigationPredictionWriter(
                     "velocity_east_mps", "velocity_north_mps", "velocity_up_mps",
                     "quaternion_w", "quaternion_x", "quaternion_y", "quaternion_z",
                     "acceleration_east_mps2", "acceleration_north_mps2",
-                    "acceleration_up_mps2", "status",
+                    "acceleration_up_mps2",
+                    "roll_rad", "pitch_rad", "yaw_rad",
+                    "angular_rate_forward_radps", "angular_rate_left_radps",
+                    "angular_rate_up_radps", "predicted_roll_rate_radps",
+                    "predicted_pitch_rate_radps", "predicted_yaw_rate_radps", "status",
                     "position_east_std_m", "position_north_std_m", "position_up_std_m",
                     "horizontal_position_std_m",
                     "velocity_east_std_mps", "velocity_north_std_mps", "velocity_up_std_mps",
@@ -47,6 +57,14 @@ class OfflineNavigationPredictionWriter(
                 )
             )
             samples.forEach { sample ->
+                val euler = sample.attitudeBodyToEnu.toEulerAngles()
+                val eulerRate = sample.angularRateBodyRadps?.let {
+                    bodyRateToEulerRate(
+                        rollRad = euler.rollRad,
+                        pitchRad = euler.pitchRad,
+                        angularRateBodyRadps = it
+                    )
+                }
                 writer.write(
                     listOf(
                         sample.elapsedRealtimeNs,
@@ -63,6 +81,15 @@ class OfflineNavigationPredictionWriter(
                         sample.accelerationEnuMps2.x,
                         sample.accelerationEnuMps2.y,
                         sample.accelerationEnuMps2.z,
+                        euler.rollRad,
+                        euler.pitchRad,
+                        euler.yawRad,
+                        sample.angularRateBodyRadps?.x,
+                        sample.angularRateBodyRadps?.y,
+                        sample.angularRateBodyRadps?.z,
+                        eulerRate?.rollRateRadps,
+                        eulerRate?.pitchRateRadps,
+                        eulerRate?.yawRateRadps,
                         sample.status.name,
                         sample.uncertainty?.positionEastStdM,
                         sample.uncertainty?.positionNorthStdM,
@@ -142,6 +169,39 @@ class OfflineNavigationPredictionWriter(
         }
     }
 
+    /**
+     * 車体座標角速度からEuler角速度を算出する。
+     * 入力: ロール・ピッチ[rad]、車体X/Y/Z軸角速度[rad/s]
+     * 出力: ロール・ピッチ・ヨー角速度[rad/s]。ピッチが特異点付近ならnull。
+     */
+    private fun bodyRateToEulerRate(
+        rollRad: Double,
+        pitchRad: Double,
+        angularRateBodyRadps: BodyVector
+    ): EulerRate? {
+        val cosPitch = cos(pitchRad)
+        if (abs(cosPitch) < MINIMUM_EULER_RATE_COS_PITCH) return null
+        val forwardRate = angularRateBodyRadps.x
+        val leftRate = angularRateBodyRadps.y
+        val upRate = angularRateBodyRadps.z
+        val sinRoll = sin(rollRad)
+        val cosRoll = cos(rollRad)
+        return EulerRate(
+            rollRateRadps = forwardRate +
+                leftRate * sinRoll * tan(pitchRad) +
+                upRate * cosRoll * tan(pitchRad),
+            pitchRateRadps = leftRate * cosRoll - upRate * sinRoll,
+            yawRateRadps =
+                (leftRate * sinRoll + upRate * cosRoll) / cosPitch
+        )
+    }
+
+    private data class EulerRate(
+        val rollRateRadps: Double,
+        val pitchRateRadps: Double,
+        val yawRateRadps: Double
+    )
+
     private class CsvWriter(file: File) : Closeable {
         private val writer: BufferedWriter = BufferedWriter(
             OutputStreamWriter(FileOutputStream(file), Charsets.UTF_8)
@@ -163,6 +223,7 @@ class OfflineNavigationPredictionWriter(
 
     companion object {
         private const val PREDICTION_FILE_NAME = "navigation_prediction.csv"
+        private const val MINIMUM_EULER_RATE_COS_PITCH = 1e-3
         private const val RESIDUAL_FILE_NAME = "navigation_gnss_residual.csv"
         private const val SUMMARY_FILE_NAME = "navigation_prediction_summary.csv"
         private const val NS_PER_SEC = 1_000_000_000.0

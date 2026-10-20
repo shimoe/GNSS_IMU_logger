@@ -119,6 +119,7 @@ data class NavigationPredictionSample(
     val velocityEnuMps: EnuVelocity,
     val attitudeBodyToEnu: AttitudeQuaternion,
     val accelerationEnuMps2: BodyVector,
+    val angularRateBodyRadps: BodyVector? = null,
     val status: NavigationPredictionStatus,
     val uncertainty: NavigationPredictionUncertainty? = null,
     val eskfUncertainty: NavigationEskfUncertainty? = null

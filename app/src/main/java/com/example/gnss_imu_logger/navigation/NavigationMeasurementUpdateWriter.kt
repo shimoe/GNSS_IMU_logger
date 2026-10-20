@@ -28,7 +28,8 @@ class NavigationMeasurementUpdateWriter(
                     "heading_gate_rad,heading_gain,heading_correction_rad," +
                     "heading_variance_rad2,eskf_heading_std_before_rad," +
                     "eskf_heading_std_after_rad,eskf_heading_measurement_std_rad," +
-                    "eskf_heading_innovation_std_rad,eskf_normalized_heading_innovation," +
+                    "eskf_heading_innovation_std_rad,opposite_heading_innovation_rad," +
+                    "opposite_heading_is_closer,eskf_normalized_heading_innovation," +
                     "rejection_reason"
             )
             records.forEach { record ->
@@ -62,6 +63,8 @@ class NavigationMeasurementUpdateWriter(
                         record.eskfHeadingStdAfterRad.format(),
                         record.eskfHeadingMeasurementStdRad.format(),
                         record.eskfHeadingInnovationStdRad.format(),
+                        record.oppositeHeadingInnovationRad.format(),
+                        record.oppositeHeadingIsCloser ?: "",
                         record.eskfNormalizedHeadingInnovation.format(),
                         record.rejectionReason?.name ?: ""
                     ).joinToString(",")
