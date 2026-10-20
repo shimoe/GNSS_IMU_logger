@@ -18,7 +18,10 @@ class NavigationGravityUpdateWriter(
         sessionDirectory.resolve(FILE_NAME).bufferedWriter().use { writer ->
             writer.appendLine(
                 "elapsed_realtime_ns,available,accepted,acceleration_norm_mps2," +
-                    "angular_rate_norm_radps,residual_rad,correction_rad"
+                    "angular_rate_norm_radps,residual_rad,correction_rad," +
+                    "roll_before_rad,pitch_before_rad,yaw_before_rad," +
+                    "roll_after_rad,pitch_after_rad,yaw_after_rad," +
+                    "roll_delta_rad,pitch_delta_rad,yaw_delta_rad"
             )
             records.forEach { record ->
                 writer.appendLine(
@@ -29,7 +32,16 @@ class NavigationGravityUpdateWriter(
                         record.accelerationNormMps2.format(),
                         record.angularRateNormRadps.format(),
                         record.residualRad.format(),
-                        record.correctionRad.format()
+                        record.correctionRad.format(),
+                        record.rollBeforeRad.format(),
+                        record.pitchBeforeRad.format(),
+                        record.yawBeforeRad.format(),
+                        record.rollAfterRad.format(),
+                        record.pitchAfterRad.format(),
+                        record.yawAfterRad.format(),
+                        record.rollDeltaRad.format(),
+                        record.pitchDeltaRad.format(),
+                        record.yawDeltaRad.format()
                     ).joinToString(",")
                 )
             }

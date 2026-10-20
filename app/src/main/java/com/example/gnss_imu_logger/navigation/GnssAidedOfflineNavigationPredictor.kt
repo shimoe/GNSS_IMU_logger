@@ -99,8 +99,10 @@ class GnssAidedOfflineNavigationPredictor(
                             val gravityDtSec = previousGravityUpdateNs?.let {
                                 (event.elapsedRealtimeNs - it) / NS_PER_SEC
                             } ?: 0.0
+                            val gravityAttitudeBefore = state.attitudeBodyToEnu
+                            val gravityEulerBefore = gravityAttitudeBefore.toEulerAngles()
                             val gravityResult = gravityUpdater.update(
-                                attitudeBodyToEnu = state.attitudeBodyToEnu,
+                                attitudeBodyToEnu = gravityAttitudeBefore,
                                 accelerationBodyMps2 = accelerationBodyMps2,
                                 angularRateBodyRadps = angularRateBodyRadps,
                                 dtSec = gravityDtSec
@@ -108,6 +110,7 @@ class GnssAidedOfflineNavigationPredictor(
                             state = state.copy(
                                 attitudeBodyToEnu = gravityResult.attitudeBodyToEnu
                             )
+                            val gravityEulerAfter = gravityResult.attitudeBodyToEnu.toEulerAngles()
                             gravityUpdates += NavigationGravityUpdateRecord(
                                 elapsedRealtimeNs = event.elapsedRealtimeNs,
                                 available = gravityResult.available,
@@ -115,7 +118,22 @@ class GnssAidedOfflineNavigationPredictor(
                                 accelerationNormMps2 = gravityResult.accelerationNormMps2,
                                 angularRateNormRadps = gravityResult.angularRateNormRadps,
                                 residualRad = gravityResult.residualRad,
-                                correctionRad = gravityResult.correctionRad
+                                correctionRad = gravityResult.correctionRad,
+                                rollBeforeRad = gravityEulerBefore.rollRad,
+                                pitchBeforeRad = gravityEulerBefore.pitchRad,
+                                yawBeforeRad = gravityEulerBefore.yawRad,
+                                rollAfterRad = gravityEulerAfter.rollRad,
+                                pitchAfterRad = gravityEulerAfter.pitchRad,
+                                yawAfterRad = gravityEulerAfter.yawRad,
+                                rollDeltaRad = wrapHeadingAngle(
+                                    gravityEulerAfter.rollRad - gravityEulerBefore.rollRad
+                                ),
+                                pitchDeltaRad = wrapHeadingAngle(
+                                    gravityEulerAfter.pitchRad - gravityEulerBefore.pitchRad
+                                ),
+                                yawDeltaRad = wrapHeadingAngle(
+                                    gravityEulerAfter.yawRad - gravityEulerBefore.yawRad
+                                )
                             )
                             previousGravityUpdateNs = event.elapsedRealtimeNs
                         }
@@ -439,7 +457,16 @@ data class NavigationGravityUpdateRecord(
     val accelerationNormMps2: Double?,
     val angularRateNormRadps: Double?,
     val residualRad: Double?,
-    val correctionRad: Double?
+    val correctionRad: Double?,
+    val rollBeforeRad: Double,
+    val pitchBeforeRad: Double,
+    val yawBeforeRad: Double,
+    val rollAfterRad: Double,
+    val pitchAfterRad: Double,
+    val yawAfterRad: Double,
+    val rollDeltaRad: Double,
+    val pitchDeltaRad: Double,
+    val yawDeltaRad: Double
 )
 
 data class NavigationMeasurementUpdateRecord(
