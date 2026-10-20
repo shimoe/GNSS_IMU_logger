@@ -111,6 +111,7 @@ class NavigationInputPreprocessor(
             ?: error("採用可能なGNSS観測がありません。")
         return PreparedNavigationInput(
             origin = input.origin,
+            initialElapsedRealtimeNs = initialGnss.elapsedRealtimeNs,
             initialPositionEnuM = initialGnss.positionEnuM,
             initialVelocityEnuMps = initialGnss.velocityEnuMps ?: EnuVelocity.ZERO,
             events = events,
@@ -248,6 +249,7 @@ sealed interface PreparedNavigationEvent {
 
 data class PreparedNavigationInput(
     val origin: GeodeticPosition,
+    val initialElapsedRealtimeNs: Long,
     val initialPositionEnuM: EnuPosition,
     val initialVelocityEnuMps: EnuVelocity,
     val events: List<PreparedNavigationEvent>,
