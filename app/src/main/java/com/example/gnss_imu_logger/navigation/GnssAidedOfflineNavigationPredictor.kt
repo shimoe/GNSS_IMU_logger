@@ -16,6 +16,8 @@ import kotlin.math.sqrt
 class GnssAidedOfflineNavigationPredictor(
     private val measurementParameters: NavigationMeasurementParameters =
         NavigationMeasurementParameters.DEFAULT,
+    private val headingParameters: NavigationHeadingParameters =
+        NavigationHeadingParameters.DEFAULT,
     private val outputIntervalNs: Long = DEFAULT_OUTPUT_INTERVAL_NS
 ) {
     fun run(input: PreparedNavigationInput): GnssAidedNavigationResult {
@@ -36,6 +38,8 @@ class GnssAidedOfflineNavigationPredictor(
         var angularRateBodyRadps: BodyVector? = null
         var nextOutputNs = input.initialElapsedRealtimeNs
         val updater = NavigationMeasurementUpdater(measurementParameters)
+        val headingUpdater = NavigationHeadingUpdater(headingParameters)
+        var headingVarianceRad2 = headingParameters.initialHeadingVarianceRad2
         val samples = mutableListOf<NavigationPredictionSample>()
         val residuals = mutableListOf<NavigationGnssResidual>()
         val updates = mutableListOf<NavigationMeasurementUpdateRecord>()
@@ -57,6 +61,10 @@ class GnssAidedOfflineNavigationPredictor(
                         angularRateBodyRadps = angularRateBodyRadps
                     )
                     variance = variance.predict(dtSec, measurementParameters)
+                    headingVarianceRad2 = headingUpdater.predictVariance(
+                        headingVarianceRad2,
+                        dtSec
+                    )
                 } else if (dtNs > MAXIMUM_INTEGRATION_INTERVAL_NS) {
                     state = state.copy(
                         elapsedRealtimeNs = event.elapsedRealtimeNs,
@@ -96,7 +104,15 @@ class GnssAidedOfflineNavigationPredictor(
                             consecutivePositionRejections = 0
                             consecutiveVelocityRejections = 0
                         }
-                        state = result.state
+                        val headingResult = headingUpdater.update(
+                            attitudeBodyToEnu = result.state.attitudeBodyToEnu,
+                            headingVarianceRad2 = headingVarianceRad2,
+                            measurement = event.update
+                        )
+                        headingVarianceRad2 = headingResult.headingVarianceRad2
+                        state = result.state.copy(
+                            attitudeBodyToEnu = headingResult.attitudeBodyToEnu
+                        )
                         variance = result.variance
                         updates += NavigationMeasurementUpdateRecord(
                             elapsedRealtimeNs = event.elapsedRealtimeNs,
@@ -112,6 +128,13 @@ class GnssAidedOfflineNavigationPredictor(
                             consecutivePositionRejectionCount = consecutivePositionRejections,
                             consecutiveVelocityRejectionCount = consecutiveVelocityRejections,
                             updateMode = result.updateMode,
+                            headingAvailable = headingResult.available,
+                            headingAccepted = headingResult.accepted,
+                            headingInnovationRad = headingResult.innovationRad,
+                            headingGateRad = headingResult.gateRad,
+                            headingGain = headingResult.gain,
+                            headingCorrectionRad = headingResult.correctionRad,
+                            headingVarianceRad2 = headingVarianceRad2,
                             rejectionReason = result.rejectionReason
                         )
                         previousGnssUpdate = event.update
@@ -288,6 +311,13 @@ data class NavigationMeasurementUpdateRecord(
     val consecutivePositionRejectionCount: Int,
     val consecutiveVelocityRejectionCount: Int,
     val updateMode: NavigationPositionUpdateMode,
+    val headingAvailable: Boolean,
+    val headingAccepted: Boolean,
+    val headingInnovationRad: Double?,
+    val headingGateRad: Double?,
+    val headingGain: Double?,
+    val headingCorrectionRad: Double?,
+    val headingVarianceRad2: Double,
     val rejectionReason: NavigationMeasurementRejectionReason?
 )
 

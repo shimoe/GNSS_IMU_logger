@@ -4,7 +4,7 @@ import java.io.File
 import java.util.Locale
 
 /**
- * GNSS位置・速度更新の採用結果をCSVへ保存する。
+ * GNSS位置・速度・進行方位更新の採用結果をCSVへ保存する。
  * 入力: NavigationMeasurementUpdateRecord一覧
  * 出力: navigation_measurement_update.csv
  */
@@ -23,7 +23,10 @@ class NavigationMeasurementUpdateWriter(
                     "position_gain_east,position_gain_north,position_gain_up," +
                     "velocity_gain_east,velocity_gain_north,velocity_gain_up," +
                     "consecutive_position_rejection_count," +
-                    "consecutive_velocity_rejection_count,position_update_mode,rejection_reason"
+                    "consecutive_velocity_rejection_count,position_update_mode," +
+                    "heading_available,heading_accepted,heading_innovation_rad," +
+                    "heading_gate_rad,heading_gain,heading_correction_rad," +
+                    "heading_variance_rad2,rejection_reason"
             )
             records.forEach { record ->
                 writer.appendLine(
@@ -45,6 +48,13 @@ class NavigationMeasurementUpdateWriter(
                         record.consecutivePositionRejectionCount,
                         record.consecutiveVelocityRejectionCount,
                         record.updateMode.name,
+                        record.headingAvailable,
+                        record.headingAccepted,
+                        record.headingInnovationRad.format(),
+                        record.headingGateRad.format(),
+                        record.headingGain.format(),
+                        record.headingCorrectionRad.format(),
+                        record.headingVarianceRad2.format(),
                         record.rejectionReason?.name ?: ""
                     ).joinToString(",")
                 )
