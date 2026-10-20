@@ -170,7 +170,7 @@ class GnssAidedOfflineNavigationPredictor(
                     }
                 }
                 if (state.elapsedRealtimeNs >= nextOutputNs) {
-                    samples += state.toSample()
+                    samples += state.toSample(variance, headingVarianceRad2)
                     nextOutputNs = state.elapsedRealtimeNs + outputIntervalNs
                 }
             }
@@ -303,13 +303,25 @@ class GnssAidedOfflineNavigationPredictor(
         )
     }
 
-    private fun NavigationState.toSample() = NavigationPredictionSample(
+    /**
+     * 現在の推定状態と分散を100 Hz出力用サンプルへ変換する。
+     * 入力: 位置・速度の軸別分散[m^2, (m/s)^2]、方位分散[rad^2]
+     * 出力: 推定値と1 sigma標準偏差
+     */
+    private fun NavigationState.toSample(
+        variance: NavigationAxisVariance,
+        headingVarianceRad2: Double
+    ) = NavigationPredictionSample(
         elapsedRealtimeNs = elapsedRealtimeNs,
         positionEnuM = positionEnuM,
         velocityEnuMps = velocityEnuMps,
         attitudeBodyToEnu = attitudeBodyToEnu,
         accelerationEnuMps2 = accelerationEnuMps2,
-        status = status
+        status = status,
+        uncertainty = NavigationPredictionUncertainty.from(
+            variance = variance,
+            headingVarianceRad2 = headingVarianceRad2
+        )
     )
 
     companion object {

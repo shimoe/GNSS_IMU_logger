@@ -35,7 +35,11 @@ class OfflineNavigationPredictionWriter(
                     "velocity_east_mps", "velocity_north_mps", "velocity_up_mps",
                     "quaternion_w", "quaternion_x", "quaternion_y", "quaternion_z",
                     "acceleration_east_mps2", "acceleration_north_mps2",
-                    "acceleration_up_mps2", "status"
+                    "acceleration_up_mps2", "status",
+                    "position_east_std_m", "position_north_std_m", "position_up_std_m",
+                    "horizontal_position_std_m",
+                    "velocity_east_std_mps", "velocity_north_std_mps", "velocity_up_std_mps",
+                    "heading_std_rad"
                 )
             )
             samples.forEach { sample ->
@@ -55,7 +59,15 @@ class OfflineNavigationPredictionWriter(
                         sample.accelerationEnuMps2.x,
                         sample.accelerationEnuMps2.y,
                         sample.accelerationEnuMps2.z,
-                        sample.status.name
+                        sample.status.name,
+                        sample.uncertainty?.positionEastStdM,
+                        sample.uncertainty?.positionNorthStdM,
+                        sample.uncertainty?.positionUpStdM,
+                        sample.uncertainty?.horizontalPositionStdM,
+                        sample.uncertainty?.velocityEastStdMps,
+                        sample.uncertainty?.velocityNorthStdMps,
+                        sample.uncertainty?.velocityUpStdMps,
+                        sample.uncertainty?.headingStdRad
                     )
                 )
             }

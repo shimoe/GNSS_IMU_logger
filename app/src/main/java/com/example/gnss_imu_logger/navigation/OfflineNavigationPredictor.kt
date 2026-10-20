@@ -119,8 +119,46 @@ data class NavigationPredictionSample(
     val velocityEnuMps: EnuVelocity,
     val attitudeBodyToEnu: AttitudeQuaternion,
     val accelerationEnuMps2: BodyVector,
-    val status: NavigationPredictionStatus
+    val status: NavigationPredictionStatus,
+    val uncertainty: NavigationPredictionUncertainty? = null
 )
+
+/**
+ * ナビゲーション推定値の1 sigma標準偏差。
+ * 入力: 位置・速度の軸別分散[m^2, (m/s)^2]、方位分散[rad^2]
+ * 出力: 位置[m]、速度[m/s]、方位[rad]の標準偏差
+ *
+ * 現段階は15状態ESKF移行前の軸別分散を出力する。
+ * 15状態共分散へ置き換えた後もCSVの列定義を維持する。
+ */
+data class NavigationPredictionUncertainty(
+    val positionEastStdM: Double,
+    val positionNorthStdM: Double,
+    val positionUpStdM: Double,
+    val horizontalPositionStdM: Double,
+    val velocityEastStdMps: Double,
+    val velocityNorthStdMps: Double,
+    val velocityUpStdMps: Double,
+    val headingStdRad: Double
+) {
+    companion object {
+        fun from(
+            variance: NavigationAxisVariance,
+            headingVarianceRad2: Double
+        ) = NavigationPredictionUncertainty(
+            positionEastStdM = kotlin.math.sqrt(variance.positionEastM2.coerceAtLeast(0.0)),
+            positionNorthStdM = kotlin.math.sqrt(variance.positionNorthM2.coerceAtLeast(0.0)),
+            positionUpStdM = kotlin.math.sqrt(variance.positionUpM2.coerceAtLeast(0.0)),
+            horizontalPositionStdM = kotlin.math.sqrt(
+                (variance.positionEastM2 + variance.positionNorthM2).coerceAtLeast(0.0)
+            ),
+            velocityEastStdMps = kotlin.math.sqrt(variance.velocityEastMps2.coerceAtLeast(0.0)),
+            velocityNorthStdMps = kotlin.math.sqrt(variance.velocityNorthMps2.coerceAtLeast(0.0)),
+            velocityUpStdMps = kotlin.math.sqrt(variance.velocityUpMps2.coerceAtLeast(0.0)),
+            headingStdRad = kotlin.math.sqrt(headingVarianceRad2.coerceAtLeast(0.0))
+        )
+    }
+}
 
 data class NavigationGnssResidual(
     val elapsedRealtimeNs: Long,
