@@ -120,7 +120,8 @@ data class NavigationPredictionSample(
     val attitudeBodyToEnu: AttitudeQuaternion,
     val accelerationEnuMps2: BodyVector,
     val status: NavigationPredictionStatus,
-    val uncertainty: NavigationPredictionUncertainty? = null
+    val uncertainty: NavigationPredictionUncertainty? = null,
+    val eskfUncertainty: NavigationEskfUncertainty? = null
 )
 
 /**
@@ -166,7 +167,10 @@ data class NavigationGnssResidual(
     val northErrorM: Double,
     val upErrorM: Double,
     val horizontalErrorM: Double,
-    val velocityErrorMps: Double?
+    val velocityErrorMps: Double?,
+    val horizontalPositionStdM: Double? = null,
+    val velocityStdMps: Double? = null,
+    val normalizedHorizontalPositionError: Double? = null
 )
 
 data class OfflineNavigationPredictionResult(

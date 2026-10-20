@@ -39,7 +39,11 @@ class OfflineNavigationPredictionWriter(
                     "position_east_std_m", "position_north_std_m", "position_up_std_m",
                     "horizontal_position_std_m",
                     "velocity_east_std_mps", "velocity_north_std_mps", "velocity_up_std_mps",
-                    "heading_std_rad"
+                    "heading_std_rad",
+                    "eskf_horizontal_position_std_m", "eskf_velocity_std_mps",
+                    "eskf_attitude_std_rad", "eskf_accelerometer_bias_std_mps2",
+                    "eskf_gyroscope_bias_std_radps", "eskf_maximum_asymmetry",
+                    "eskf_minimum_diagonal"
                 )
             )
             samples.forEach { sample ->
@@ -67,7 +71,14 @@ class OfflineNavigationPredictionWriter(
                         sample.uncertainty?.velocityEastStdMps,
                         sample.uncertainty?.velocityNorthStdMps,
                         sample.uncertainty?.velocityUpStdMps,
-                        sample.uncertainty?.headingStdRad
+                        sample.uncertainty?.headingStdRad,
+                        sample.eskfUncertainty?.horizontalPositionStdM,
+                        sample.eskfUncertainty?.velocityStdMps,
+                        sample.eskfUncertainty?.attitudeStdRad,
+                        sample.eskfUncertainty?.accelerometerBiasStdMps2,
+                        sample.eskfUncertainty?.gyroscopeBiasStdRadps,
+                        sample.eskfUncertainty?.maximumAsymmetry,
+                        sample.eskfUncertainty?.minimumDiagonal
                     )
                 )
             }
@@ -79,7 +90,9 @@ class OfflineNavigationPredictionWriter(
             writer.write(
                 listOf(
                     "elapsed_realtime_ns", "east_error_m", "north_error_m", "up_error_m",
-                    "horizontal_error_m", "velocity_error_mps"
+                    "horizontal_error_m", "velocity_error_mps",
+                    "horizontal_position_std_m", "velocity_std_mps",
+                    "normalized_horizontal_position_error"
                 )
             )
             residuals.forEach { residual ->
@@ -90,7 +103,10 @@ class OfflineNavigationPredictionWriter(
                         residual.northErrorM,
                         residual.upErrorM,
                         residual.horizontalErrorM,
-                        residual.velocityErrorMps
+                        residual.velocityErrorMps,
+                        residual.horizontalPositionStdM,
+                        residual.velocityStdMps,
+                        residual.normalizedHorizontalPositionError
                     )
                 )
             }

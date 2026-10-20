@@ -20,6 +20,8 @@ class GnssAidedOfflineNavigationPredictor(
         NavigationHeadingParameters.DEFAULT,
     private val gravityParameters: NavigationGravityParameters =
         NavigationGravityParameters.DEFAULT,
+    private val eskfNoiseParameters: NavigationEskfNoiseParameters =
+        NavigationEskfNoiseParameters.DEFAULT,
     private val outputIntervalNs: Long = DEFAULT_OUTPUT_INTERVAL_NS
 ) {
     fun run(input: PreparedNavigationInput): GnssAidedNavigationResult {
@@ -36,6 +38,7 @@ class GnssAidedOfflineNavigationPredictor(
             status = NavigationPredictionStatus.WAITING_FOR_IMU
         )
         var variance = NavigationAxisVariance.DEFAULT
+        var eskfCovariance = NavigationEskfCovariance.initial(eskfNoiseParameters)
         var accelerationBodyMps2: BodyVector? = null
         var angularRateBodyRadps: BodyVector? = null
         var nextOutputNs = input.initialElapsedRealtimeNs
@@ -58,6 +61,17 @@ class GnssAidedOfflineNavigationPredictor(
                 val dtNs = event.elapsedRealtimeNs - state.elapsedRealtimeNs
                 if (dtNs > 0L && dtNs <= MAXIMUM_INTEGRATION_INTERVAL_NS) {
                     val dtSec = dtNs / NS_PER_SEC
+                    val correctedAcceleration = accelerationBodyMps2?.minus(state.accelerometerBiasMps2)
+                        ?: ZERO_VECTOR
+                    val correctedAngularRate = angularRateBodyRadps?.minus(state.gyroscopeBiasRadps)
+                        ?: ZERO_VECTOR
+                    eskfCovariance = eskfCovariance.predict(
+                        dtSec = dtSec,
+                        attitudeBodyToEnu = state.attitudeBodyToEnu,
+                        accelerationBodyMps2 = correctedAcceleration,
+                        angularRateBodyRadps = correctedAngularRate,
+                        parameters = eskfNoiseParameters
+                    )
                     state = predict(
                         state = state,
                         timestampNs = event.elapsedRealtimeNs,
@@ -107,7 +121,7 @@ class GnssAidedOfflineNavigationPredictor(
                         }
                     }
                     is PreparedNavigationEvent.Gnss -> {
-                        val residual = createResidual(state, event.update)
+                        val residual = createResidual(state, variance, event.update)
                         residuals += residual
                         var result = updater.update(state, variance, event.update)
                         consecutivePositionRejections = if (result.positionAccepted) {
@@ -170,7 +184,7 @@ class GnssAidedOfflineNavigationPredictor(
                     }
                 }
                 if (state.elapsedRealtimeNs >= nextOutputNs) {
-                    samples += state.toSample(variance, headingVarianceRad2)
+                    samples += state.toSample(variance, headingVarianceRad2, eskfCovariance)
                     nextOutputNs = state.elapsedRealtimeNs + outputIntervalNs
                 }
             }
@@ -280,8 +294,14 @@ class GnssAidedOfflineNavigationPredictor(
         return AttitudeQuaternion.fromEulerAngles(rollRad, pitchRad, yawRad)
     }
 
+    /**
+     * GNSS観測直前の推定誤差と不確かさの整合性を記録する。
+     * 入力: 推定状態、位置・速度の軸別分散、GNSS観測
+     * 出力: GNSS残差、1 sigma標準偏差、正規化水平位置誤差
+     */
     private fun createResidual(
         state: NavigationState,
+        variance: NavigationAxisVariance,
         measurement: NavigationGnssUpdate
     ): NavigationGnssResidual {
         val eastErrorM = state.positionEnuM.eastM - measurement.positionEnuM.eastM
@@ -293,13 +313,26 @@ class GnssAidedOfflineNavigationPredictor(
             val up = state.velocityEnuMps.upMps - it.upMps
             sqrt(east * east + north * north + up * up)
         }
+        val horizontalErrorM = sqrt(eastErrorM * eastErrorM + northErrorM * northErrorM)
+        val uncertainty = NavigationPredictionUncertainty.from(
+            variance = variance,
+            headingVarianceRad2 = 0.0
+        )
         return NavigationGnssResidual(
             elapsedRealtimeNs = measurement.elapsedRealtimeNs,
             eastErrorM = eastErrorM,
             northErrorM = northErrorM,
             upErrorM = upErrorM,
-            horizontalErrorM = sqrt(eastErrorM * eastErrorM + northErrorM * northErrorM),
-            velocityErrorMps = velocityErrorMps
+            horizontalErrorM = horizontalErrorM,
+            velocityErrorMps = velocityErrorMps,
+            horizontalPositionStdM = uncertainty.horizontalPositionStdM,
+            velocityStdMps = sqrt(
+                variance.velocityEastMps2 +
+                    variance.velocityNorthMps2 +
+                    variance.velocityUpMps2
+            ),
+            normalizedHorizontalPositionError =
+                horizontalErrorM / uncertainty.horizontalPositionStdM
         )
     }
 
@@ -310,7 +343,8 @@ class GnssAidedOfflineNavigationPredictor(
      */
     private fun NavigationState.toSample(
         variance: NavigationAxisVariance,
-        headingVarianceRad2: Double
+        headingVarianceRad2: Double,
+        eskfCovariance: NavigationEskfCovariance
     ) = NavigationPredictionSample(
         elapsedRealtimeNs = elapsedRealtimeNs,
         positionEnuM = positionEnuM,
@@ -321,7 +355,8 @@ class GnssAidedOfflineNavigationPredictor(
         uncertainty = NavigationPredictionUncertainty.from(
             variance = variance,
             headingVarianceRad2 = headingVarianceRad2
-        )
+        ),
+        eskfUncertainty = NavigationEskfUncertainty.from(eskfCovariance)
     )
 
     companion object {
