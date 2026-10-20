@@ -18,6 +18,8 @@ class GnssAidedOfflineNavigationPredictor(
         NavigationMeasurementParameters.DEFAULT,
     private val headingParameters: NavigationHeadingParameters =
         NavigationHeadingParameters.DEFAULT,
+    private val gravityParameters: NavigationGravityParameters =
+        NavigationGravityParameters.DEFAULT,
     private val outputIntervalNs: Long = DEFAULT_OUTPUT_INTERVAL_NS
 ) {
     fun run(input: PreparedNavigationInput): GnssAidedNavigationResult {
@@ -39,10 +41,13 @@ class GnssAidedOfflineNavigationPredictor(
         var nextOutputNs = input.initialElapsedRealtimeNs
         val updater = NavigationMeasurementUpdater(measurementParameters)
         val headingUpdater = NavigationHeadingUpdater(headingParameters)
+        val gravityUpdater = NavigationGravityUpdater(gravityParameters)
         var headingVarianceRad2 = headingParameters.initialHeadingVarianceRad2
         val samples = mutableListOf<NavigationPredictionSample>()
         val residuals = mutableListOf<NavigationGnssResidual>()
         val updates = mutableListOf<NavigationMeasurementUpdateRecord>()
+        val gravityUpdates = mutableListOf<NavigationGravityUpdateRecord>()
+        var previousGravityUpdateNs: Long? = null
         var consecutivePositionRejections = 0
         var consecutiveVelocityRejections = 0
         var previousGnssUpdate: NavigationGnssUpdate? = null
@@ -76,6 +81,30 @@ class GnssAidedOfflineNavigationPredictor(
                     is PreparedNavigationEvent.Imu -> {
                         event.sample.accelerationBodyMps2?.let { accelerationBodyMps2 = it }
                         event.sample.angularRateBodyRadps?.let { angularRateBodyRadps = it }
+                        if (event.sample.accelerationBodyMps2 != null) {
+                            val gravityDtSec = previousGravityUpdateNs?.let {
+                                (event.elapsedRealtimeNs - it) / NS_PER_SEC
+                            } ?: 0.0
+                            val gravityResult = gravityUpdater.update(
+                                attitudeBodyToEnu = state.attitudeBodyToEnu,
+                                accelerationBodyMps2 = accelerationBodyMps2,
+                                angularRateBodyRadps = angularRateBodyRadps,
+                                dtSec = gravityDtSec
+                            )
+                            state = state.copy(
+                                attitudeBodyToEnu = gravityResult.attitudeBodyToEnu
+                            )
+                            gravityUpdates += NavigationGravityUpdateRecord(
+                                elapsedRealtimeNs = event.elapsedRealtimeNs,
+                                available = gravityResult.available,
+                                accepted = gravityResult.accepted,
+                                accelerationNormMps2 = gravityResult.accelerationNormMps2,
+                                angularRateNormRadps = gravityResult.angularRateNormRadps,
+                                residualRad = gravityResult.residualRad,
+                                correctionRad = gravityResult.correctionRad
+                            )
+                            previousGravityUpdateNs = event.elapsedRealtimeNs
+                        }
                     }
                     is PreparedNavigationEvent.Gnss -> {
                         val residual = createResidual(state, event.update)
@@ -147,7 +176,8 @@ class GnssAidedOfflineNavigationPredictor(
             }
         return GnssAidedNavigationResult(
             prediction = OfflineNavigationPredictionResult(samples, residuals),
-            measurementUpdates = updates
+            measurementUpdates = updates,
+            gravityUpdates = gravityUpdates
         )
     }
 
@@ -294,7 +324,18 @@ class GnssAidedOfflineNavigationPredictor(
 
 data class GnssAidedNavigationResult(
     val prediction: OfflineNavigationPredictionResult,
-    val measurementUpdates: List<NavigationMeasurementUpdateRecord>
+    val measurementUpdates: List<NavigationMeasurementUpdateRecord>,
+    val gravityUpdates: List<NavigationGravityUpdateRecord>
+)
+
+data class NavigationGravityUpdateRecord(
+    val elapsedRealtimeNs: Long,
+    val available: Boolean,
+    val accepted: Boolean,
+    val accelerationNormMps2: Double?,
+    val angularRateNormRadps: Double?,
+    val residualRad: Double?,
+    val correctionRad: Double?
 )
 
 data class NavigationMeasurementUpdateRecord(
