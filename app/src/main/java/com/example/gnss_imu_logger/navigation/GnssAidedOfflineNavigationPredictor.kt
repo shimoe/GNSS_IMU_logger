@@ -158,6 +158,23 @@ class GnssAidedOfflineNavigationPredictor(
                             measurement = event.update
                         )
                         headingVarianceRad2 = headingResult.headingVarianceRad2
+                        val eskfHeadingStdBeforeRad = eskfCovariance.standardDeviation(
+                            NavigationErrorStateIndex.ATTITUDE + 2
+                        )
+                        val eskfHeadingMeasurementStdRad = event.update.bearingAccuracyRad?.let {
+                            maxOf(it, headingParameters.minimumBearingAccuracyRad)
+                        }
+                        val eskfHeadingInnovationStdRad = eskfHeadingMeasurementStdRad?.let {
+                            sqrt(eskfHeadingStdBeforeRad * eskfHeadingStdBeforeRad + it * it)
+                        }
+                        eskfCovariance = eskfCovariance.updateHeading(
+                            measurement = event.update,
+                            headingAccepted = headingResult.accepted,
+                            minimumBearingAccuracyRad = headingParameters.minimumBearingAccuracyRad
+                        )
+                        val eskfHeadingStdAfterRad = eskfCovariance.standardDeviation(
+                            NavigationErrorStateIndex.ATTITUDE + 2
+                        )
                         state = result.state.copy(
                             attitudeBodyToEnu = headingResult.attitudeBodyToEnu
                         )
@@ -183,6 +200,18 @@ class GnssAidedOfflineNavigationPredictor(
                             headingGain = headingResult.gain,
                             headingCorrectionRad = headingResult.correctionRad,
                             headingVarianceRad2 = headingVarianceRad2,
+                            eskfHeadingStdBeforeRad = eskfHeadingStdBeforeRad,
+                            eskfHeadingStdAfterRad = eskfHeadingStdAfterRad,
+                            eskfHeadingMeasurementStdRad = eskfHeadingMeasurementStdRad,
+                            eskfHeadingInnovationStdRad = eskfHeadingInnovationStdRad,
+                            eskfNormalizedHeadingInnovation = if (
+                                headingResult.innovationRad != null &&
+                                eskfHeadingInnovationStdRad != null &&
+                                eskfHeadingInnovationStdRad > 0.0
+                            ) {
+                                kotlin.math.abs(headingResult.innovationRad) /
+                                    eskfHeadingInnovationStdRad
+                            } else null,
                             rejectionReason = result.rejectionReason
                         )
                         previousGnssUpdate = event.update
@@ -416,6 +445,11 @@ data class NavigationMeasurementUpdateRecord(
     val headingGain: Double?,
     val headingCorrectionRad: Double?,
     val headingVarianceRad2: Double,
+    val eskfHeadingStdBeforeRad: Double?,
+    val eskfHeadingStdAfterRad: Double?,
+    val eskfHeadingMeasurementStdRad: Double?,
+    val eskfHeadingInnovationStdRad: Double?,
+    val eskfNormalizedHeadingInnovation: Double?,
     val rejectionReason: NavigationMeasurementRejectionReason?
 )
 

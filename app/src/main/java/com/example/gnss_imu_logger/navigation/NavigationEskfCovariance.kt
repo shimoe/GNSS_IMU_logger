@@ -134,6 +134,30 @@ class NavigationEskfCovariance private constructor(
         return NavigationEskfCovariance(symmetrize(updated))
     }
 
+    /**
+     * 採用済みGNSS進行方位でヨー誤差共分散を更新する。
+     * 入力: GNSS方位精度[rad]、既存方位更新の採用結果
+     * 出力: ヨー誤差をスカラーJoseph形式で更新した15x15共分散
+     *
+     * GNSS進行方位はピッチ・ロールを直接観測しないため、姿勢誤差のZ成分だけを
+     * 直接観測する。公称姿勢は既存のNavigationHeadingUpdaterが補正する。
+     */
+    fun updateHeading(
+        measurement: NavigationGnssUpdate,
+        headingAccepted: Boolean,
+        minimumBearingAccuracyRad: Double
+    ): NavigationEskfCovariance {
+        val accuracyRad = measurement.bearingAccuracyRad
+        if (!headingAccepted || accuracyRad == null || !accuracyRad.isFinite()) return this
+        val standardDeviationRad = maxOf(accuracyRad, minimumBearingAccuracyRad)
+        val updated = scalarJosephUpdate(
+            covariance = values.copyOf(),
+            observedStateIndex = NavigationErrorStateIndex.ATTITUDE + 2,
+            measurementVariance = standardDeviationRad * standardDeviationRad
+        )
+        return NavigationEskfCovariance(symmetrize(updated))
+    }
+
     fun standardDeviation(stateIndex: Int): Double =
         sqrt(this[stateIndex, stateIndex].coerceAtLeast(0.0))
 

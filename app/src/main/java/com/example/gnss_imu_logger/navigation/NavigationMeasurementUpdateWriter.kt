@@ -26,7 +26,10 @@ class NavigationMeasurementUpdateWriter(
                     "consecutive_velocity_rejection_count,position_update_mode," +
                     "heading_available,heading_accepted,heading_innovation_rad," +
                     "heading_gate_rad,heading_gain,heading_correction_rad," +
-                    "heading_variance_rad2,rejection_reason"
+                    "heading_variance_rad2,eskf_heading_std_before_rad," +
+                    "eskf_heading_std_after_rad,eskf_heading_measurement_std_rad," +
+                    "eskf_heading_innovation_std_rad,eskf_normalized_heading_innovation," +
+                    "rejection_reason"
             )
             records.forEach { record ->
                 writer.appendLine(
@@ -55,6 +58,11 @@ class NavigationMeasurementUpdateWriter(
                         record.headingGain.format(),
                         record.headingCorrectionRad.format(),
                         record.headingVarianceRad2.format(),
+                        record.eskfHeadingStdBeforeRad.format(),
+                        record.eskfHeadingStdAfterRad.format(),
+                        record.eskfHeadingMeasurementStdRad.format(),
+                        record.eskfHeadingInnovationStdRad.format(),
+                        record.eskfNormalizedHeadingInnovation.format(),
                         record.rejectionReason?.name ?: ""
                     ).joinToString(",")
                 )
