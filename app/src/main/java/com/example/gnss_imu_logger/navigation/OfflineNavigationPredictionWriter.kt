@@ -92,7 +92,9 @@ class OfflineNavigationPredictionWriter(
                     "elapsed_realtime_ns", "east_error_m", "north_error_m", "up_error_m",
                     "horizontal_error_m", "velocity_error_mps",
                     "horizontal_position_std_m", "velocity_std_mps",
-                    "normalized_horizontal_position_error"
+                    "normalized_horizontal_position_error",
+                    "eskf_horizontal_position_std_m",
+                    "eskf_normalized_horizontal_position_error"
                 )
             )
             residuals.forEach { residual ->
@@ -106,7 +108,9 @@ class OfflineNavigationPredictionWriter(
                         residual.velocityErrorMps,
                         residual.horizontalPositionStdM,
                         residual.velocityStdMps,
-                        residual.normalizedHorizontalPositionError
+                        residual.normalizedHorizontalPositionError,
+                        residual.eskfHorizontalPositionStdM,
+                        residual.eskfNormalizedHorizontalPositionError
                     )
                 )
             }

@@ -170,7 +170,9 @@ data class NavigationGnssResidual(
     val velocityErrorMps: Double?,
     val horizontalPositionStdM: Double? = null,
     val velocityStdMps: Double? = null,
-    val normalizedHorizontalPositionError: Double? = null
+    val normalizedHorizontalPositionError: Double? = null,
+    val eskfHorizontalPositionStdM: Double? = null,
+    val eskfNormalizedHorizontalPositionError: Double? = null
 )
 
 data class OfflineNavigationPredictionResult(

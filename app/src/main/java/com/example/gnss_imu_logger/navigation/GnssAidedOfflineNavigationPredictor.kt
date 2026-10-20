@@ -121,7 +121,7 @@ class GnssAidedOfflineNavigationPredictor(
                         }
                     }
                     is PreparedNavigationEvent.Gnss -> {
-                        val residual = createResidual(state, variance, event.update)
+                        val residual = createResidual(state, variance, eskfCovariance, event.update)
                         residuals += residual
                         var result = updater.update(state, variance, event.update)
                         consecutivePositionRejections = if (result.positionAccepted) {
@@ -147,6 +147,11 @@ class GnssAidedOfflineNavigationPredictor(
                             consecutivePositionRejections = 0
                             consecutiveVelocityRejections = 0
                         }
+                        eskfCovariance = eskfCovariance.updateGnss(
+                            measurement = event.update,
+                            positionAccepted = result.positionAccepted,
+                            velocityAccepted = result.velocityAccepted
+                        )
                         val headingResult = headingUpdater.update(
                             attitudeBodyToEnu = result.state.attitudeBodyToEnu,
                             headingVarianceRad2 = headingVarianceRad2,
@@ -302,6 +307,7 @@ class GnssAidedOfflineNavigationPredictor(
     private fun createResidual(
         state: NavigationState,
         variance: NavigationAxisVariance,
+        eskfCovariance: NavigationEskfCovariance,
         measurement: NavigationGnssUpdate
     ): NavigationGnssResidual {
         val eastErrorM = state.positionEnuM.eastM - measurement.positionEnuM.eastM
@@ -332,7 +338,11 @@ class GnssAidedOfflineNavigationPredictor(
                     variance.velocityUpMps2
             ),
             normalizedHorizontalPositionError =
-                horizontalErrorM / uncertainty.horizontalPositionStdM
+                horizontalErrorM / uncertainty.horizontalPositionStdM,
+            eskfHorizontalPositionStdM =
+                NavigationEskfUncertainty.from(eskfCovariance).horizontalPositionStdM,
+            eskfNormalizedHorizontalPositionError = horizontalErrorM /
+                NavigationEskfUncertainty.from(eskfCovariance).horizontalPositionStdM
         )
     }
 

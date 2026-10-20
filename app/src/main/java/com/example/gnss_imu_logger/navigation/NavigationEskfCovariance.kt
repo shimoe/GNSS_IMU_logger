@@ -99,6 +99,41 @@ class NavigationEskfCovariance private constructor(
         return NavigationEskfCovariance(symmetrize(predicted))
     }
 
+
+    /**
+     * 採用済みGNSS位置・速度観測で共分散のみを更新する。
+     * 入力: GNSS観測標準偏差、既存推定器の位置・速度採用結果
+     * 出力: スカラーJoseph形式を各観測軸へ順次適用した15x15共分散
+     *
+     * 公称状態とIMUバイアスは変更しない。既存推定経路を維持したまま、
+     * GNSS観測による15状態共分散の収束だけを評価する段階の実装である。
+     */
+    fun updateGnss(
+        measurement: NavigationGnssUpdate,
+        positionAccepted: Boolean,
+        velocityAccepted: Boolean
+    ): NavigationEskfCovariance {
+        var updated = values.copyOf()
+        if (positionAccepted) {
+            val horizontalVariance = measurement.positionStdM * measurement.positionStdM
+            val verticalVariance = measurement.verticalStdM * measurement.verticalStdM
+            updated = scalarJosephUpdate(updated, NavigationErrorStateIndex.POSITION, horizontalVariance)
+            updated = scalarJosephUpdate(updated, NavigationErrorStateIndex.POSITION + 1, horizontalVariance)
+            updated = scalarJosephUpdate(updated, NavigationErrorStateIndex.POSITION + 2, verticalVariance)
+        }
+        if (velocityAccepted && measurement.velocityEnuMps != null) {
+            val velocityVariance = measurement.speedStdMps * measurement.speedStdMps
+            repeat(3) { axis ->
+                updated = scalarJosephUpdate(
+                    updated,
+                    NavigationErrorStateIndex.VELOCITY + axis,
+                    velocityVariance
+                )
+            }
+        }
+        return NavigationEskfCovariance(symmetrize(updated))
+    }
+
     fun standardDeviation(stateIndex: Int): Double =
         sqrt(this[stateIndex, stateIndex].coerceAtLeast(0.0))
 
@@ -157,6 +192,35 @@ class NavigationEskfCovariance private constructor(
                 values[index(NavigationErrorStateIndex.ACCELEROMETER_BIAS + axis, NavigationErrorStateIndex.ACCELEROMETER_BIAS + axis)] += accelerometerBiasVariance * dtSec
                 values[index(NavigationErrorStateIndex.GYROSCOPE_BIAS + axis, NavigationErrorStateIndex.GYROSCOPE_BIAS + axis)] += gyroscopeBiasVariance * dtSec
             }
+        }
+
+
+        /** Hが単一状態を直接観測する場合のJoseph形式共分散更新。 */
+        private fun scalarJosephUpdate(
+            covariance: DoubleArray,
+            observedStateIndex: Int,
+            measurementVariance: Double
+        ): DoubleArray {
+            if (!measurementVariance.isFinite() || measurementVariance <= 0.0) return covariance
+            val innovationVariance =
+                covariance[index(observedStateIndex, observedStateIndex)] + measurementVariance
+            if (!innovationVariance.isFinite() || innovationVariance <= 0.0) return covariance
+            val gain = DoubleArray(STATE_SIZE) { row ->
+                covariance[index(row, observedStateIndex)] / innovationVariance
+            }
+            val identityMinusGainH = identityMatrix()
+            repeat(STATE_SIZE) { row ->
+                identityMinusGainH[index(row, observedStateIndex)] -= gain[row]
+            }
+            val joseph = multiply(
+                multiply(identityMinusGainH, covariance),
+                transpose(identityMinusGainH)
+            )
+            for (row in 0 until STATE_SIZE) for (column in 0 until STATE_SIZE) {
+                joseph[index(row, column)] +=
+                    gain[row] * measurementVariance * gain[column]
+            }
+            return joseph
         }
 
         private fun rotationMatrix(attitude: AttitudeQuaternion): DoubleArray {
