@@ -31,11 +31,15 @@ class OfflineNavigationProcessor {
         NavigationGravityUpdateWriter(sessionDirectory).write(
             result.gravityUpdates
         )
+        NavigationAttitudePredictionWriter(sessionDirectory).write(
+            result.attitudePredictions
+        )
         return OfflineNavigationProcessResult(
             predictionSampleCount = result.prediction.samples.size,
             gnssResidualCount = result.prediction.gnssResiduals.size,
             measurementUpdateCount = result.measurementUpdates.size,
             gravityUpdateCount = result.gravityUpdates.size,
+            attitudePredictionCount = result.attitudePredictions.size,
             assessment = summary.assessment
         )
     }
@@ -46,5 +50,6 @@ data class OfflineNavigationProcessResult(
     val gnssResidualCount: Int,
     val measurementUpdateCount: Int,
     val gravityUpdateCount: Int,
+    val attitudePredictionCount: Int,
     val assessment: NavigationPredictionAssessment
 )

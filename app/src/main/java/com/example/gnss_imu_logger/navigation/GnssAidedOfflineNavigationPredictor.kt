@@ -50,6 +50,7 @@ class GnssAidedOfflineNavigationPredictor(
         val residuals = mutableListOf<NavigationGnssResidual>()
         val updates = mutableListOf<NavigationMeasurementUpdateRecord>()
         val gravityUpdates = mutableListOf<NavigationGravityUpdateRecord>()
+        val attitudePredictions = mutableListOf<NavigationAttitudePredictionRecord>()
         var previousGravityUpdateNs: Long? = null
         var consecutivePositionRejections = 0
         var consecutiveVelocityRejections = 0
@@ -72,12 +73,32 @@ class GnssAidedOfflineNavigationPredictor(
                         angularRateBodyRadps = correctedAngularRate,
                         parameters = eskfNoiseParameters
                     )
+                    val attitudeBefore = state.attitudeBodyToEnu
+                    val eulerBefore = attitudeBefore.toEulerAngles()
                     state = predict(
                         state = state,
                         timestampNs = event.elapsedRealtimeNs,
                         dtSec = dtSec,
                         accelerationBodyMps2 = accelerationBodyMps2,
                         angularRateBodyRadps = angularRateBodyRadps
+                    )
+                    val attitudeAfter = state.attitudeBodyToEnu
+                    val eulerAfter = attitudeAfter.toEulerAngles()
+                    attitudePredictions += NavigationAttitudePredictionRecord(
+                        elapsedRealtimeNs = event.elapsedRealtimeNs,
+                        source = when (event) {
+                            is PreparedNavigationEvent.Imu -> "IMU"
+                            is PreparedNavigationEvent.Gnss -> "GNSS"
+                        },
+                        dtSec = dtSec,
+                        angularRateForwardRadps = correctedAngularRate.x,
+                        angularRateLeftRadps = correctedAngularRate.y,
+                        angularRateUpRadps = correctedAngularRate.z,
+                        quaternionBefore = attitudeBefore,
+                        quaternionAfter = attitudeAfter,
+                        rollDeltaRad = wrapHeadingAngle(eulerAfter.rollRad - eulerBefore.rollRad),
+                        pitchDeltaRad = wrapHeadingAngle(eulerAfter.pitchRad - eulerBefore.pitchRad),
+                        yawDeltaRad = wrapHeadingAngle(eulerAfter.yawRad - eulerBefore.yawRad)
                     )
                     variance = variance.predict(dtSec, measurementParameters)
                     headingVarianceRad2 = headingUpdater.predictVariance(
@@ -259,7 +280,8 @@ class GnssAidedOfflineNavigationPredictor(
         return GnssAidedNavigationResult(
             prediction = OfflineNavigationPredictionResult(samples, residuals),
             measurementUpdates = updates,
-            gravityUpdates = gravityUpdates
+            gravityUpdates = gravityUpdates,
+            attitudePredictions = attitudePredictions
         )
     }
 
@@ -447,7 +469,22 @@ class GnssAidedOfflineNavigationPredictor(
 data class GnssAidedNavigationResult(
     val prediction: OfflineNavigationPredictionResult,
     val measurementUpdates: List<NavigationMeasurementUpdateRecord>,
-    val gravityUpdates: List<NavigationGravityUpdateRecord>
+    val gravityUpdates: List<NavigationGravityUpdateRecord>,
+    val attitudePredictions: List<NavigationAttitudePredictionRecord>
+)
+
+data class NavigationAttitudePredictionRecord(
+    val elapsedRealtimeNs: Long,
+    val source: String,
+    val dtSec: Double,
+    val angularRateForwardRadps: Double,
+    val angularRateLeftRadps: Double,
+    val angularRateUpRadps: Double,
+    val quaternionBefore: AttitudeQuaternion,
+    val quaternionAfter: AttitudeQuaternion,
+    val rollDeltaRad: Double,
+    val pitchDeltaRad: Double,
+    val yawDeltaRad: Double
 )
 
 data class NavigationGravityUpdateRecord(

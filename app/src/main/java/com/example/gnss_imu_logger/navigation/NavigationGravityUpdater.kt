@@ -77,10 +77,18 @@ class NavigationGravityUpdater(
         )
         val correctionRateBody = correctionAxisBody *
             (correctionRad / axisNorm / dtSec)
-        val correctedAttitude = (
+        val gravityCorrectedAttitude = (
             attitudeBodyToEnu *
                 AttitudeQuaternion.fromAngularVelocity(correctionRateBody, dtSec)
             ).normalized()
+        // 重力補正はロール・ピッチだけに適用し、補正前のヨーを維持する。
+        val yawBeforeRad = attitudeBodyToEnu.toEulerAngles().yawRad
+        val correctedEuler = gravityCorrectedAttitude.toEulerAngles()
+        val correctedAttitude = AttitudeQuaternion.fromEulerAngles(
+            rollRad = correctedEuler.rollRad,
+            pitchRad = correctedEuler.pitchRad,
+            yawRad = yawBeforeRad
+        )
         return NavigationGravityUpdateResult(
             attitudeBodyToEnu = correctedAttitude,
             available = true,
