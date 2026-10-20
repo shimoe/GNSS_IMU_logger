@@ -28,14 +28,22 @@ class GnssCollector(
     private val epochId = AtomicLong(0L)
     private var started = false
     private var closed = false
+    private var totalSatellites = 0
     private var usedSatellites = 0
+    private var usedSatelliteMeanCn0DbHz: Double? = null
+    private var allSatelliteMeanCn0DbHz: Double? = null
+    private var maximumCn0DbHz: Double? = null
+    private var latestStatusElapsedNs: Long? = null
     private var consecutiveLocationCount = 0
     private val locationWriter = CsvLogWriter(session.file("gnss.csv"), listOf(
         "elapsed_realtime_ns","session_elapsed_ns","utc_ms","latitude_deg","longitude_deg",
         "altitude_m","speed_mps","bearing_deg","horizontal_accuracy_m","vertical_accuracy_m",
-        "speed_accuracy_mps","bearing_accuracy_deg","provider","mock"))
+        "speed_accuracy_mps","bearing_accuracy_deg","elapsed_realtime_uncertainty_ns",
+        "total_satellites","used_satellites","used_satellite_mean_cn0_dbhz",
+        "all_satellite_mean_cn0_dbhz","maximum_cn0_dbhz","status_age_ms","provider","mock"))
     private val statusWriter = CsvLogWriter(session.file("gnss_status.csv"), listOf(
-        "elapsed_realtime_ns","session_elapsed_ns","total_satellites","used_satellites"))
+        "elapsed_realtime_ns","session_elapsed_ns","total_satellites","used_satellites",
+        "used_satellite_mean_cn0_dbhz","all_satellite_mean_cn0_dbhz","maximum_cn0_dbhz"))
     private val rawClockWriter = if (session.mode == LogMode.DIAGNOSTIC) CsvLogWriter(
         session.file("raw_gnss_clock.csv"), listOf("epoch_id","elapsed_realtime_ns",
         "elapsed_realtime_uncertainty_ns","time_ns","time_uncertainty_ns","full_bias_ns","bias_ns",
@@ -49,10 +57,36 @@ class GnssCollector(
     private val statusCallback = object : GnssStatus.Callback() {
         override fun onSatelliteStatusChanged(status: GnssStatus) {
             var used = 0
-            for (i in 0 until status.satelliteCount) if (status.usedInFix(i)) used++
+            var usedCn0Sum = 0.0
+            var allCn0Sum = 0.0
+            var maximumCn0 = Double.NEGATIVE_INFINITY
+            for (i in 0 until status.satelliteCount) {
+                val cn0 = status.getCn0DbHz(i).toDouble()
+                allCn0Sum += cn0
+                maximumCn0 = maxOf(maximumCn0, cn0)
+                if (status.usedInFix(i)) {
+                    used++
+                    usedCn0Sum += cn0
+                }
+            }
+            totalSatellites = status.satelliteCount
             usedSatellites = used
+            usedSatelliteMeanCn0DbHz = if (used > 0) usedCn0Sum / used else null
+            allSatelliteMeanCn0DbHz = if (status.satelliteCount > 0) {
+                allCn0Sum / status.satelliteCount
+            } else null
+            maximumCn0DbHz = maximumCn0.takeIf { it.isFinite() }
             val now = android.os.SystemClock.elapsedRealtimeNanos()
-            statusWriter.write(listOf(now, session.time.sessionElapsedNs(now), status.satelliteCount, used))
+            latestStatusElapsedNs = now
+            statusWriter.write(listOf(
+                now,
+                session.time.sessionElapsedNs(now),
+                totalSatellites,
+                usedSatellites,
+                usedSatelliteMeanCn0DbHz,
+                allSatelliteMeanCn0DbHz,
+                maximumCn0DbHz
+            ))
         }
     }
     private val measurementCallback = object : GnssMeasurementsEvent.Callback() {
@@ -82,7 +116,17 @@ class GnssCollector(
                 if(location.hasBearing()) location.bearing else null,if(location.hasAccuracy()) location.accuracy else null,
                 if(location.hasVerticalAccuracy()) location.verticalAccuracyMeters else null,
                 if(location.hasSpeedAccuracy()) location.speedAccuracyMetersPerSecond else null,
-                if(location.hasBearingAccuracy()) location.bearingAccuracyDegrees else null,location.provider,
+                if(location.hasBearingAccuracy()) location.bearingAccuracyDegrees else null,
+                if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.Q && location.hasElapsedRealtimeUncertaintyNanos()) {
+                    location.elapsedRealtimeUncertaintyNanos
+                } else null,
+                totalSatellites,
+                usedSatellites,
+                usedSatelliteMeanCn0DbHz,
+                allSatelliteMeanCn0DbHz,
+                maximumCn0DbHz,
+                latestStatusElapsedNs?.let { statusNs -> (t - statusNs).coerceAtLeast(0L) / NS_PER_MS },
+                location.provider,
                 if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.S) location.isMock else location.isFromMockProvider))
             locationWriter.flush()
         } catch(e:Throwable){ onFatalError("GNSS位置ログの書き込みに失敗しました",e) }
@@ -102,4 +146,8 @@ class GnssCollector(
         if(m.hasCarrierFrequencyHz())m.carrierFrequencyHz else null,m.multipathIndicator,
         if(m.hasAutomaticGainControlLevelDb())m.automaticGainControlLevelDb else null)) }
     override fun close(){ if(closed)return;closed=true;if(started){locationManager.removeUpdates(this);locationManager.unregisterGnssStatusCallback(statusCallback);if(session.mode==LogMode.DIAGNOSTIC)locationManager.unregisterGnssMeasurementsCallback(measurementCallback)};locationWriter.close();statusWriter.close();rawClockWriter?.close();rawMeasurementWriter?.close();started=false }
+
+    companion object {
+        private const val NS_PER_MS = 1_000_000L
+    }
 }
