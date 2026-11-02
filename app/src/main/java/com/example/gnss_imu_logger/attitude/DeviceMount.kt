@@ -29,7 +29,17 @@ enum class DeviceMount(
         val DEFAULT = SCREEN_UP_TOP_FORWARD
 
         fun fromName(value: String?): DeviceMount =
-            entries.firstOrNull { it.name == value } ?: DEFAULT
+            fromStoredName(value) ?: DEFAULT
+
+        /**
+         * session.jsonへ保存された取付方向を解決する。
+         * 入力: device_mountの文字列
+         * 出力: 対応するDeviceMount。不明な値または空値はnull
+         */
+        fun fromStoredName(value: String?): DeviceMount? {
+            val normalized = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            return entries.firstOrNull { it.name.equals(normalized, ignoreCase = true) }
+        }
     }
 }
 

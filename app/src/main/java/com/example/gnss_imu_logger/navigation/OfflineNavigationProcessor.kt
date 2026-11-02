@@ -17,6 +17,7 @@ class OfflineNavigationProcessor {
         }
         val input = OfflineNavigationInputReader(sessionDirectory).read()
         val prepared = NavigationInputPreprocessor().prepare(input)
+        writeInputMetadata(sessionDirectory, prepared)
         val result = GnssAidedOfflineNavigationPredictor().run(prepared)
         val summary = OfflineNavigationPredictionSummarizer().summarize(
             result.prediction
@@ -38,6 +39,7 @@ class OfflineNavigationProcessor {
             result.headingDirections
         )
         return OfflineNavigationProcessResult(
+            deviceMount = prepared.deviceMount.name,
             predictionSampleCount = result.prediction.samples.size,
             gnssResidualCount = result.prediction.gnssResiduals.size,
             measurementUpdateCount = result.measurementUpdates.size,
@@ -46,9 +48,28 @@ class OfflineNavigationProcessor {
             assessment = summary.assessment
         )
     }
+
+    /**
+     * オフライン解析へ使用した取付方向を保存する。
+     * 入力: セッションディレクトリ、前処理済み入力
+     * 出力: navigation_input_metadata.csv
+     */
+    private fun writeInputMetadata(
+        sessionDirectory: File,
+        input: PreparedNavigationInput
+    ) {
+        sessionDirectory.resolve("navigation_input_metadata.csv")
+            .bufferedWriter(Charsets.UTF_8)
+            .use { writer ->
+                writer.appendLine("metric,value")
+                writer.appendLine("device_mount,${input.deviceMount.name}")
+                writer.appendLine("device_mount_source,session.json")
+            }
+    }
 }
 
 data class OfflineNavigationProcessResult(
+    val deviceMount: String,
     val predictionSampleCount: Int,
     val gnssResidualCount: Int,
     val measurementUpdateCount: Int,

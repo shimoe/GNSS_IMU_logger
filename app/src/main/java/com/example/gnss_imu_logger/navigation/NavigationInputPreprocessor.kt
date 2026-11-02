@@ -1,7 +1,7 @@
 package com.example.gnss_imu_logger.navigation
 
-import com.example.gnss_imu_logger.attitude.BodyFrameTransform
 import com.example.gnss_imu_logger.attitude.BodyVector
+import com.example.gnss_imu_logger.attitude.DeviceMount
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -16,6 +16,7 @@ class NavigationInputPreprocessor(
 ) {
     fun prepare(input: OfflineNavigationInput): PreparedNavigationInput {
         val plane = LocalTangentPlane(input.origin)
+        val mountTransform = input.deviceMount.transform()
         val diagnostics = MutableDiagnostics()
         var previousEventNs: Long? = null
         var previousAccelerationNs: Long? = null
@@ -40,7 +41,7 @@ class NavigationInputPreprocessor(
                     PreparedNavigationEvent.Imu(
                         NavigationImuSample(
                             elapsedRealtimeNs = sample.elapsedRealtimeNs,
-                            accelerationBodyMps2 = BodyFrameTransform.deviceToBody(
+                            accelerationBodyMps2 = mountTransform.deviceToBody(
                                 floatArrayOf(
                                     sample.correctedX.toFloat(),
                                     sample.correctedY.toFloat(),
@@ -66,7 +67,7 @@ class NavigationInputPreprocessor(
                         NavigationImuSample(
                             elapsedRealtimeNs = sample.elapsedRealtimeNs,
                             accelerationBodyMps2 = null,
-                            angularRateBodyRadps = BodyFrameTransform.deviceToBody(
+                            angularRateBodyRadps = mountTransform.deviceToBody(
                                 floatArrayOf(
                                     sample.correctedX.toFloat(),
                                     sample.correctedY.toFloat(),
@@ -111,6 +112,7 @@ class NavigationInputPreprocessor(
             ?: error("採用可能なGNSS観測がありません。")
         return PreparedNavigationInput(
             origin = input.origin,
+            deviceMount = input.deviceMount,
             initialElapsedRealtimeNs = initialGnss.elapsedRealtimeNs,
             initialPositionEnuM = initialGnss.positionEnuM,
             initialVelocityEnuMps = initialGnss.velocityEnuMps ?: EnuVelocity.ZERO,
@@ -249,6 +251,7 @@ sealed interface PreparedNavigationEvent {
 
 data class PreparedNavigationInput(
     val origin: GeodeticPosition,
+    val deviceMount: DeviceMount,
     val initialElapsedRealtimeNs: Long,
     val initialPositionEnuM: EnuPosition,
     val initialVelocityEnuMps: EnuVelocity,

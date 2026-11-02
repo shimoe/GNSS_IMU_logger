@@ -1,5 +1,7 @@
 package com.example.gnss_imu_logger.navigation
 
+import com.example.gnss_imu_logger.attitude.DeviceMount
+import org.json.JSONObject
 import java.io.File
 import java.util.PriorityQueue
 
@@ -21,6 +23,7 @@ class OfflineNavigationInputReader(
         require(sessionDirectory.isDirectory) {
             "セッションディレクトリが存在しません: ${sessionDirectory.path}"
         }
+        val deviceMount = readDeviceMount(requiredFile("session.json"))
         val accelerometerFile = requiredFile("accel.bin")
         val gyroscopeFile = preferredFile("gyro_corrected.bin", "gyro.bin")
         val observations = readGnssCsv(requiredFile("gnss.csv"))
@@ -29,8 +32,26 @@ class OfflineNavigationInputReader(
             ?: error("原点に使用できるGNSS観測がありません。")
         return OfflineNavigationInput(
             origin = originObservation.position,
+            deviceMount = deviceMount,
             events = mergeEvents(accelerometerFile, gyroscopeFile, observations)
         )
+    }
+
+    /**
+     * 計測時に保存された端末取付方向を読み込む。
+     * 入力: session.json
+     * 出力: セッションで使用したDeviceMount
+     */
+    private fun readDeviceMount(file: File): DeviceMount {
+        val json = runCatching { JSONObject(file.readText(Charsets.UTF_8)) }
+            .getOrElse { error("session.jsonを読み込めません: ${it.message}") }
+        val formatVersion = json.optInt("format_version", -1)
+        require(formatVersion >= DEVICE_MOUNT_FORMAT_VERSION) {
+            "端末取付方向を確認できないセッション形式です: format_version=$formatVersion"
+        }
+        val storedName = json.optString("device_mount", "")
+        return DeviceMount.fromStoredName(storedName)
+            ?: error("session.jsonの端末取付方向が不正です: device_mount=$storedName")
     }
 
     private fun mergeEvents(
@@ -140,6 +161,10 @@ class OfflineNavigationInputReader(
     private fun Map<String, String>.optionalDouble(name: String): Double? =
         get(name)?.takeIf { it.isNotBlank() }?.toDoubleOrNull()
 
+    companion object {
+        private const val DEVICE_MOUNT_FORMAT_VERSION = 2
+    }
+
     private class EventSource private constructor(
         val priority: Int,
         private val iterator: Iterator<OfflineNavigationEvent>
@@ -183,6 +208,7 @@ class OfflineNavigationInputReader(
 
 data class OfflineNavigationInput(
     val origin: GeodeticPosition,
+    val deviceMount: DeviceMount,
     val events: Sequence<OfflineNavigationEvent>
 )
 
