@@ -96,6 +96,19 @@ class GnssAidedOfflineNavigationPredictor(
                         angularRateForwardRadps = correctedAngularRate.x,
                         angularRateLeftRadps = correctedAngularRate.y,
                         angularRateUpRadps = correctedAngularRate.z,
+                        accelerationBodyForwardMps2 = correctedAcceleration.x,
+                        accelerationBodyLeftMps2 = correctedAcceleration.y,
+                        accelerationBodyUpMps2 = correctedAcceleration.z,
+                        accelerationEnuEastMps2 = state.accelerationEnuMps2.x,
+                        accelerationEnuNorthMps2 = state.accelerationEnuMps2.y,
+                        accelerationEnuUpMps2 = state.accelerationEnuMps2.z,
+                        velocityEastMps = state.velocityEnuMps.eastMps,
+                        velocityNorthMps = state.velocityEnuMps.northMps,
+                        velocityUpMps = state.velocityEnuMps.upMps,
+                        rollAfterRad = eulerAfter.rollRad,
+                        pitchAfterRad = eulerAfter.pitchRad,
+                        yawAfterRad = eulerAfter.yawRad,
+                        abnormalReason = predictionAbnormalReason(state),
                         quaternionBefore = attitudeBefore,
                         quaternionAfter = attitudeAfter,
                         rollDeltaRad = wrapHeadingAngle(eulerAfter.rollRad - eulerBefore.rollRad),
@@ -363,6 +376,38 @@ class GnssAidedOfflineNavigationPredictor(
         )
     }
 
+    /**
+     * 重力除去後加速度と速度から、最初に確認すべき異常を分類する。
+     * 入力: IMU予測後の状態
+     * 出力: 異常理由。しきい値内は空文字
+     */
+    private fun predictionAbnormalReason(state: NavigationState): String {
+        val acceleration = state.accelerationEnuMps2
+        val horizontalAcceleration = sqrt(
+            acceleration.x * acceleration.x + acceleration.y * acceleration.y
+        )
+        val accelerationNorm = sqrt(
+            horizontalAcceleration * horizontalAcceleration + acceleration.z * acceleration.z
+        )
+        val horizontalSpeed = sqrt(
+            state.velocityEnuMps.eastMps * state.velocityEnuMps.eastMps +
+                state.velocityEnuMps.northMps * state.velocityEnuMps.northMps
+        )
+        return when {
+            !accelerationNorm.isFinite() || !horizontalSpeed.isFinite() ||
+                !state.velocityEnuMps.upMps.isFinite() -> "NON_FINITE"
+            accelerationNorm >= ABNORMAL_ACCELERATION_NORM_MPS2 -> "ACCELERATION_NORM"
+            horizontalAcceleration >= ABNORMAL_HORIZONTAL_ACCELERATION_MPS2 ->
+                "HORIZONTAL_ACCELERATION"
+            kotlin.math.abs(acceleration.z) >= ABNORMAL_VERTICAL_ACCELERATION_MPS2 ->
+                "VERTICAL_ACCELERATION"
+            kotlin.math.abs(state.velocityEnuMps.upMps) >= ABNORMAL_VERTICAL_SPEED_MPS ->
+                "VERTICAL_SPEED"
+            horizontalSpeed >= ABNORMAL_HORIZONTAL_SPEED_MPS -> "HORIZONTAL_SPEED"
+            else -> ""
+        }
+    }
+
     private fun shouldReacquire(
         consecutivePositionRejections: Int,
         previous: NavigationGnssUpdate?,
@@ -539,6 +584,11 @@ class GnssAidedOfflineNavigationPredictor(
         private const val DEFAULT_OUTPUT_INTERVAL_NS = 10_000_000L
         private const val MAXIMUM_INTEGRATION_INTERVAL_NS = 100_000_000L
         private const val MINIMUM_INITIAL_YAW_SPEED_MPS = 2.0
+        private const val ABNORMAL_ACCELERATION_NORM_MPS2 = 20.0
+        private const val ABNORMAL_HORIZONTAL_ACCELERATION_MPS2 = 15.0
+        private const val ABNORMAL_VERTICAL_ACCELERATION_MPS2 = 15.0
+        private const val ABNORMAL_VERTICAL_SPEED_MPS = 20.0
+        private const val ABNORMAL_HORIZONTAL_SPEED_MPS = 80.0
         private val ZERO_VECTOR = BodyVector(0.0, 0.0, 0.0)
         private val GRAVITY_ENU_MPS2 = BodyVector(0.0, 0.0, 9.80665)
     }
@@ -559,6 +609,19 @@ data class NavigationAttitudePredictionRecord(
     val angularRateForwardRadps: Double,
     val angularRateLeftRadps: Double,
     val angularRateUpRadps: Double,
+    val accelerationBodyForwardMps2: Double,
+    val accelerationBodyLeftMps2: Double,
+    val accelerationBodyUpMps2: Double,
+    val accelerationEnuEastMps2: Double,
+    val accelerationEnuNorthMps2: Double,
+    val accelerationEnuUpMps2: Double,
+    val velocityEastMps: Double,
+    val velocityNorthMps: Double,
+    val velocityUpMps: Double,
+    val rollAfterRad: Double,
+    val pitchAfterRad: Double,
+    val yawAfterRad: Double,
+    val abnormalReason: String,
     val quaternionBefore: AttitudeQuaternion,
     val quaternionAfter: AttitudeQuaternion,
     val rollDeltaRad: Double,
