@@ -54,23 +54,44 @@ class OfflineNavigationPredictionSummarizer(
                 it.status == NavigationPredictionStatus.IMU_GAP
             },
             gnssGapEvaluations = gapEvaluations,
-            assessment = assess(horizontalErrors.last(), velocityErrors.lastOrNull())
+            assessment = assess(
+                finalHorizontalErrorM = horizontalErrors.last(),
+                maximumHorizontalErrorM = horizontalErrors.maxOrNull() ?: 0.0,
+                finalVelocityErrorMps = velocityErrors.lastOrNull(),
+                maximumVelocityErrorMps = velocityErrors.maxOrNull()
+            )
         )
     }
 
+    /**
+     * 最終値と走行中の最大値から純粋IMU予測を評価する。
+     * 入力: 水平位置誤差[m]と速度誤差[m/s]の最終値・最大値
+     * 出力: 予測結果の評価
+     */
     private fun assess(
         finalHorizontalErrorM: Double,
-        finalVelocityErrorMps: Double?
-    ): NavigationPredictionAssessment = when {
-        !finalHorizontalErrorM.isFinite() || finalVelocityErrorMps?.isFinite() == false ->
-            NavigationPredictionAssessment.INVALID
-        finalHorizontalErrorM > DIVERGED_POSITION_ERROR_M ||
-            (finalVelocityErrorMps ?: 0.0) > DIVERGED_VELOCITY_ERROR_MPS ->
-            NavigationPredictionAssessment.DIVERGED
-        finalHorizontalErrorM > LARGE_POSITION_ERROR_M ||
-            (finalVelocityErrorMps ?: 0.0) > LARGE_VELOCITY_ERROR_MPS ->
-            NavigationPredictionAssessment.LARGE_DRIFT
-        else -> NavigationPredictionAssessment.ACCEPTABLE_FOR_PURE_PREDICTION
+        maximumHorizontalErrorM: Double,
+        finalVelocityErrorMps: Double?,
+        maximumVelocityErrorMps: Double?
+    ): NavigationPredictionAssessment {
+        val positionErrors = listOf(finalHorizontalErrorM, maximumHorizontalErrorM)
+        val velocityErrors = listOfNotNull(finalVelocityErrorMps, maximumVelocityErrorMps)
+        if (positionErrors.any { !it.isFinite() } || velocityErrors.any { !it.isFinite() }) {
+            return NavigationPredictionAssessment.INVALID
+        }
+        if (
+            positionErrors.any { it > DIVERGED_POSITION_ERROR_M } ||
+            velocityErrors.any { it > DIVERGED_VELOCITY_ERROR_MPS }
+        ) {
+            return NavigationPredictionAssessment.DIVERGED
+        }
+        if (
+            positionErrors.any { it > LARGE_POSITION_ERROR_M } ||
+            velocityErrors.any { it > LARGE_VELOCITY_ERROR_MPS }
+        ) {
+            return NavigationPredictionAssessment.LARGE_DRIFT
+        }
+        return NavigationPredictionAssessment.ACCEPTABLE_FOR_PURE_PREDICTION
     }
 
     private fun difference(first: Double?, second: Double?): Double? =
