@@ -193,52 +193,115 @@ class GnssAidedOfflineNavigationPredictor(
                             positionAccepted = result.positionAccepted,
                             velocityAccepted = result.velocityAccepted
                         )
-                        val headingResult = headingUpdater.update(
+                        val headingProbe = headingUpdater.update(
                             attitudeBodyToEnu = result.state.attitudeBodyToEnu,
                             headingVarianceRad2 = headingVarianceRad2,
                             measurement = event.update
                         )
-                        headingVarianceRad2 = headingResult.headingVarianceRad2
+
                         val eskfHeadingStdBeforeRad = eskfCovariance.standardDeviation(
                             NavigationErrorStateIndex.ATTITUDE + 2
                         )
-                        val eskfHeadingMeasurementStdRad = event.update.bearingAccuracyRad?.let {
-                            maxOf(it, headingParameters.minimumBearingAccuracyRad)
-                        }
-                        val oppositeHeadingInnovationRad = headingResult.innovationRad?.let {
+
+                        val oppositeHeadingInnovationRad = headingProbe.innovationRad?.let {
                             wrapHeadingAngle(it + kotlin.math.PI)
                         }
+
                         val oppositeHeadingIsCloser = if (
-                            headingResult.innovationRad != null && oppositeHeadingInnovationRad != null
+                            headingProbe.innovationRad != null &&
+                            oppositeHeadingInnovationRad != null
                         ) {
                             kotlin.math.abs(oppositeHeadingInnovationRad) <
-                                kotlin.math.abs(headingResult.innovationRad)
-                        } else null
+                                kotlin.math.abs(headingProbe.innovationRad)
+                        } else {
+                            null
+                        }
+
                         val horizontalSpeedMps = event.update.velocityEnuMps?.let {
-                            sqrt(it.eastMps * it.eastMps + it.northMps * it.northMps)
+                            sqrt(
+                                it.eastMps * it.eastMps +
+                                    it.northMps * it.northMps
+                            )
                         }
+
                         val angularRateNormRadps = angularRateBodyRadps?.let {
-                            sqrt(it.x * it.x + it.y * it.y + it.z * it.z)
+                            sqrt(
+                                it.x * it.x +
+                                    it.y * it.y +
+                                    it.z * it.z
+                            )
                         }
-                        headingDirections += headingDirectionTracker.update(
+
+                        val headingDirection = headingDirectionTracker.update(
                             elapsedRealtimeNs = event.elapsedRealtimeNs,
                             speedMps = horizontalSpeedMps,
                             angularRateNormRadps = angularRateNormRadps,
-                            regularInnovationRad = headingResult.innovationRad,
+                            regularInnovationRad = headingProbe.innovationRad,
                             oppositeInnovationRad = oppositeHeadingInnovationRad
                         )
-                        val eskfHeadingInnovationStdRad = eskfHeadingMeasurementStdRad?.let {
-                            sqrt(eskfHeadingStdBeforeRad * eskfHeadingStdBeforeRad + it * it)
+
+                        headingDirections += headingDirection
+
+                        // 確定した進行方向に合わせてGNSS方位を選択する。
+                        val headingMeasurement = when (headingDirection.state) {
+                            NavigationHeadingDirectionState.FORWARD -> {
+                                event.update
+                            }
+
+                            NavigationHeadingDirectionState.REVERSE -> {
+                                event.update.copy(
+                                    bearingRad = event.update.bearingRad?.let {
+                                        wrapHeadingAngle(it + kotlin.math.PI)
+                                    }
+                                )
+                            }
+
+                            NavigationHeadingDirectionState.UNRESOLVED -> {
+                                event.update.copy(
+                                    bearingRad = null,
+                                    bearingAccuracyRad = null
+                                )
+                            }
                         }
+
+                        // headingMeasurement生成後に参照する。
+                        val eskfHeadingMeasurementStdRad =
+                            headingMeasurement.bearingAccuracyRad?.let {
+                                maxOf(
+                                    it,
+                                    headingParameters.minimumBearingAccuracyRad
+                                )
+                            }
+
+                        val headingResult = headingUpdater.update(
+                            attitudeBodyToEnu = result.state.attitudeBodyToEnu,
+                            headingVarianceRad2 = headingVarianceRad2,
+                            measurement = headingMeasurement
+                        )
+
+                        headingVarianceRad2 =
+                            headingResult.headingVarianceRad2
+
+                        val eskfHeadingInnovationStdRad =
+                            eskfHeadingMeasurementStdRad?.let {
+                                sqrt(
+                                    eskfHeadingStdBeforeRad * eskfHeadingStdBeforeRad +
+                                        it * it
+                                )
+                            }
+
                         eskfCovariance = eskfCovariance.updateHeading(
-                            measurement = event.update,
+                            measurement = headingMeasurement,
                             headingAccepted = headingResult.accepted,
-                            minimumBearingAccuracyRad = headingParameters.minimumBearingAccuracyRad
+                            minimumBearingAccuracyRad =
+                                headingParameters.minimumBearingAccuracyRad
                         )
-                        val eskfHeadingStdAfterRad = eskfCovariance.standardDeviation(
-                            NavigationErrorStateIndex.ATTITUDE + 2
-                        )
-                        state = result.state.copy(
+
+                        val eskfHeadingStdAfterRad =
+                            eskfCovariance.standardDeviation(
+                                NavigationErrorStateIndex.ATTITUDE + 2
+                            )
+                            state = result.state.copy(
                             attitudeBodyToEnu = headingResult.attitudeBodyToEnu
                         )
                         variance = result.variance
@@ -274,8 +337,7 @@ class GnssAidedOfflineNavigationPredictor(
                                 eskfHeadingInnovationStdRad != null &&
                                 eskfHeadingInnovationStdRad > 0.0
                             ) {
-                                kotlin.math.abs(headingResult.innovationRad) /
-                                    eskfHeadingInnovationStdRad
+                                kotlin.math.abs(headingResult.innovationRad) /  eskfHeadingInnovationStdRad
                             } else null,
                             rejectionReason = result.rejectionReason
                         )
