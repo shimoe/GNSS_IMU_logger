@@ -41,9 +41,8 @@ class NavigationMeasurementUpdater(
                 variance.positionUpM2 + measurement.verticalStdM * measurement.verticalStdM
             )
         )
-        val positionAccepted =
-            horizontalInnovationM <= horizontalPositionGateM &&
-                kotlin.math.abs(positionInnovation.upM) <= verticalPositionGateM
+        // GNSS位置は水平軸だけを更新する。Up位置は気圧高度の専用更新で補正する。
+        val positionAccepted = horizontalInnovationM <= horizontalPositionGateM
 
         val positionResult = if (positionAccepted) {
             updatePosition(state, variance, measurement, positionInnovation)
@@ -98,11 +97,9 @@ class NavigationMeasurementUpdater(
         state: NavigationState,
         measurement: NavigationGnssUpdate
     ): NavigationMeasurementUpdateResult {
-        val velocity = measurement.velocityEnuMps ?: EnuVelocity(
-            eastMps = state.velocityEnuMps.eastMps,
-            northMps = state.velocityEnuMps.northMps,
-            upMps = 0.0
-        )
+        val velocity = measurement.velocityEnuMps?.copy(
+            upMps = state.velocityEnuMps.upMps
+        ) ?: state.velocityEnuMps
         val horizontalVarianceM2 = max(
             parameters.minimumVariance,
             measurement.positionStdM * measurement.positionStdM
@@ -119,16 +116,18 @@ class NavigationMeasurementUpdater(
         val north = measurement.positionEnuM.northM - state.positionEnuM.northM
         return NavigationMeasurementUpdateResult(
             state = state.copy(
-                positionEnuM = measurement.positionEnuM,
+                positionEnuM = measurement.positionEnuM.copy(
+                    upM = state.positionEnuM.upM
+                ),
                 velocityEnuMps = velocity
             ),
             variance = NavigationAxisVariance(
                 positionEastM2 = horizontalVarianceM2,
                 positionNorthM2 = horizontalVarianceM2,
-                positionUpM2 = verticalVarianceM2,
+                positionUpM2 = NavigationAxisVariance.DEFAULT.positionUpM2,
                 velocityEastMps2 = speedVarianceMps2,
                 velocityNorthMps2 = speedVarianceMps2,
-                velocityUpMps2 = speedVarianceMps2
+                velocityUpMps2 = NavigationAxisVariance.DEFAULT.velocityUpMps2
             ),
             positionAccepted = true,
             velocityAccepted = measurement.velocityEnuMps != null,
@@ -161,12 +160,12 @@ class NavigationMeasurementUpdater(
             position = EnuPosition(
                 eastM = state.positionEnuM.eastM + gain.east * innovation.eastM,
                 northM = state.positionEnuM.northM + gain.north * innovation.northM,
-                upM = state.positionEnuM.upM + gain.up * innovation.upM
+                upM = state.positionEnuM.upM
             ),
             variance = variance.copy(
                 positionEastM2 = reducedVariance(variance.positionEastM2, gain.east),
                 positionNorthM2 = reducedVariance(variance.positionNorthM2, gain.north),
-                positionUpM2 = reducedVariance(variance.positionUpM2, gain.up)
+                positionUpM2 = variance.positionUpM2
             ),
             gain = gain
         )
@@ -185,8 +184,7 @@ class NavigationMeasurementUpdater(
         )
         val innovationMps = sqrt(
             innovation.eastMps * innovation.eastMps +
-                innovation.northMps * innovation.northMps +
-                innovation.upMps * innovation.upMps
+                innovation.northMps * innovation.northMps
         )
         val observationNoiseMps2 = max(
             speedStdMps,
@@ -214,12 +212,12 @@ class NavigationMeasurementUpdater(
             velocity = EnuVelocity(
                 eastMps = predictedVelocity.eastMps + gain.east * innovation.eastMps,
                 northMps = predictedVelocity.northMps + gain.north * innovation.northMps,
-                upMps = predictedVelocity.upMps + gain.up * innovation.upMps
+                upMps = predictedVelocity.upMps
             ),
             variance = variance.copy(
                 velocityEastMps2 = reducedVariance(variance.velocityEastMps2, gain.east),
                 velocityNorthMps2 = reducedVariance(variance.velocityNorthMps2, gain.north),
-                velocityUpMps2 = reducedVariance(variance.velocityUpMps2, gain.up)
+                velocityUpMps2 = variance.velocityUpMps2
             ),
             innovationMps = innovationMps,
             accepted = true,

@@ -25,6 +25,8 @@ class GnssAidedOfflineNavigationPredictor(
     private val outputIntervalNs: Long = DEFAULT_OUTPUT_INTERVAL_NS,
     private val attitudePredictionSink: NavigationAttitudePredictionSink =
         NavigationAttitudePredictionSink.NONE,
+    private val verticalObservations: List<NavigationVerticalObservation> = emptyList(),
+    private val verticalUpdateWriter: NavigationVerticalUpdateWriter? = null,
     private val attitudeDiagnosticIntervalNs: Long = DEFAULT_ATTITUDE_DIAGNOSTIC_INTERVAL_NS
 ) {
     init {
@@ -63,6 +65,8 @@ class GnssAidedOfflineNavigationPredictor(
         var previousAbnormalReason = ""
         val headingDirections = mutableListOf<NavigationHeadingDirectionRecord>()
         val headingDirectionTracker = NavigationHeadingDirectionTracker()
+        val verticalUpdater = NavigationVerticalUpdater()
+        var verticalObservationIndex = 0
         var previousGravityUpdateNs: Long? = null
         var consecutivePositionRejections = 0
         var consecutiveVelocityRejections = 0
@@ -382,6 +386,19 @@ class GnssAidedOfflineNavigationPredictor(
                         )
                         previousGnssUpdate = event.update
                     }
+                }
+                while (
+                    verticalObservationIndex < verticalObservations.size &&
+                    verticalObservations[verticalObservationIndex].elapsedRealtimeNs <=
+                    state.elapsedRealtimeNs
+                ) {
+                    val observation = verticalObservations[verticalObservationIndex]
+                    val stateBefore = state
+                    val verticalResult = verticalUpdater.update(state, variance, observation)
+                    state = verticalResult.state
+                    variance = verticalResult.variance
+                    verticalUpdateWriter?.write(observation, stateBefore, verticalResult)
+                    verticalObservationIndex++
                 }
                 if (state.elapsedRealtimeNs >= nextOutputNs) {
                     samples += state.toSample(

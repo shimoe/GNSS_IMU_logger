@@ -32,19 +32,27 @@ class OfflineNavigationProcessor {
 
             stage = NavigationAnalysisStage.GSI_TERRAIN
             status.update(stage)
-            runCatching {
+            val terrainReference = runCatching {
                 GsiTerrainElevationEvaluator(sessionDirectory).evaluate(barometricAltitude)
             }.onFailure { error ->
                 sessionDirectory.resolve("navigation_gsi_terrain_error.txt")
                     .writeText("地理院DEM評価に失敗しました: ${error.message}", Charsets.UTF_8)
-            }
+            }.getOrNull()
+            val verticalObservations = NavigationVerticalObservationFactory().create(
+                barometric = barometricAltitude,
+                reference = terrainReference
+            )
 
             stage = NavigationAnalysisStage.NAVIGATION
             status.update(stage)
-            val result = NavigationAttitudePredictionWriter(sessionDirectory).use { writer ->
-                GnssAidedOfflineNavigationPredictor(
-                    attitudePredictionSink = writer
-                ).run(prepared)
+            val result = NavigationAttitudePredictionWriter(sessionDirectory).use { attitudeWriter ->
+                NavigationVerticalUpdateWriter(sessionDirectory).use { verticalWriter ->
+                    GnssAidedOfflineNavigationPredictor(
+                        attitudePredictionSink = attitudeWriter,
+                        verticalObservations = verticalObservations,
+                        verticalUpdateWriter = verticalWriter
+                    ).run(prepared)
+                }
             }
             NavigationInitializationWriter(sessionDirectory).write(result.initialization)
             val summary = OfflineNavigationPredictionSummarizer().summarize(result.prediction)
@@ -113,7 +121,8 @@ class OfflineNavigationProcessor {
             "navigation_measurement_update.csv",
             "navigation_prediction.csv",
             "navigation_prediction_summary.csv",
-            "navigation_vertical_reference.csv"
+            "navigation_vertical_reference.csv",
+            "navigation_vertical_update.csv"
         )
     }
 }
