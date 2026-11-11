@@ -71,6 +71,8 @@ class GnssAidedOfflineNavigationPredictor(
         val accelerometerBiasUpdates = mutableListOf<NavigationAccelerometerBiasUpdateRecord>()
         val horizontalErrorAnalyzer = NavigationHorizontalErrorAnalyzer(verticalObservations)
         val horizontalErrorRecords = mutableListOf<NavigationHorizontalErrorRecord>()
+        val pitchReferenceAnalyzer = NavigationPitchReferenceAnalyzer(verticalObservations)
+        val pitchReferenceRecords = mutableListOf<NavigationPitchReferenceRecord>()
         val verticalUpdater = NavigationVerticalUpdater()
         var verticalObservationIndex = 0
         var previousGravityUpdateNs: Long? = null
@@ -374,6 +376,11 @@ class GnssAidedOfflineNavigationPredictor(
                             directionState = headingDirection.stateAfter,
                             trackingState = trackingResult.record.stateAfter
                         )
+                        pitchReferenceRecords += pitchReferenceAnalyzer.analyze(
+                            state = stateBeforeGnss,
+                            gnss = event.update,
+                            trackingState = trackingResult.record.stateAfter
+                        )
                         val gnssIntervalSec = previousGnssUpdate?.let {
                             (event.update.elapsedRealtimeNs - it.elapsedRealtimeNs) / NS_PER_SEC
                         }
@@ -471,7 +478,8 @@ class GnssAidedOfflineNavigationPredictor(
             headingDirections = headingDirections,
             headingTrackingRecords = headingTrackingRecords,
             accelerometerBiasUpdates = accelerometerBiasUpdates,
-            horizontalErrorRecords = horizontalErrorRecords
+            horizontalErrorRecords = horizontalErrorRecords,
+            pitchReferenceRecords = pitchReferenceRecords
         )
     }
 
@@ -676,7 +684,8 @@ data class GnssAidedNavigationResult(
     val headingDirections: List<NavigationHeadingDirectionRecord>,
     val headingTrackingRecords: List<NavigationHeadingTrackingRecord>,
     val accelerometerBiasUpdates: List<NavigationAccelerometerBiasUpdateRecord>,
-    val horizontalErrorRecords: List<NavigationHorizontalErrorRecord>
+    val horizontalErrorRecords: List<NavigationHorizontalErrorRecord>,
+    val pitchReferenceRecords: List<NavigationPitchReferenceRecord>
 )
 
 data class NavigationAttitudePredictionRecord(

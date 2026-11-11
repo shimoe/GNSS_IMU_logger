@@ -70,6 +70,14 @@ class OfflineNavigationProcessor {
             NavigationHorizontalErrorWriter(sessionDirectory).write(
                 result.horizontalErrorRecords
             )
+            require(result.pitchReferenceRecords.size == result.prediction.gnssResiduals.size) {
+                "pitch基準分析件数がGNSS残差件数と一致しません: " +
+                    "pitch=${result.pitchReferenceRecords.size}, " +
+                    "gnss=${result.prediction.gnssResiduals.size}"
+            }
+            NavigationPitchReferenceWriter(sessionDirectory).write(
+                result.pitchReferenceRecords
+            )
             val processResult = OfflineNavigationProcessResult(
                 deviceMount = prepared.deviceMount.name,
                 predictionSampleCount = result.prediction.samples.size,
@@ -90,7 +98,15 @@ class OfflineNavigationProcessor {
 
     /** 前回の解析結果を削除し、異なる実装世代のCSVが混在しないようにする。 */
     private fun clearPreviousOutputs(sessionDirectory: File) {
-        OUTPUT_FILE_NAMES.forEach { name -> sessionDirectory.resolve(name).delete() }
+        OUTPUT_FILE_NAMES.forEach { name ->
+            val file = sessionDirectory.resolve(name)
+            if (file.exists() && !file.delete()) {
+                error("前回解析結果を削除できません: ${file.path}")
+            }
+        }
+        require(!sessionDirectory.resolve("navigation_accelerometer_bias_shadow.csv").exists()) {
+            "削除済みシャドー診断CSVが残っています。"
+        }
         sessionDirectory.resolve("navigation_gsi_dem_cache")
             .takeIf { it.isDirectory }
             ?.deleteRecursively()
@@ -126,6 +142,7 @@ class OfflineNavigationProcessor {
             "navigation_initialization.csv",
             "navigation_input_metadata.csv",
             "navigation_measurement_update.csv",
+            "navigation_pitch_reference.csv",
             "navigation_prediction.csv",
             "navigation_prediction_summary.csv",
             "navigation_vertical_reference.csv",

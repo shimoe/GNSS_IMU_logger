@@ -13,7 +13,8 @@ class NavigationHorizontalErrorWriter(private val sessionDirectory: File) {
                     "innovation_north_mps,along_track_innovation_mps,cross_track_innovation_mps," +
                     "acceleration_east_mps2,acceleration_north_mps2," +
                     "along_track_acceleration_mps2,cross_track_acceleration_mps2," +
-                    "estimated_pitch_rad,road_grade_rad,pitch_grade_residual_rad," +
+                    "estimated_pitch_rad,vehicle_grade_rad,road_grade_rad," +
+                    "pitch_grade_residual_rad," +
                     "gravity_leak_mps2,position_difference_velocity_east_mps," +
                     "position_difference_velocity_north_mps,gnss_velocity_consistency_error_mps," +
                     "gnss_bearing_consistency_error_rad,window_sample_count," +
@@ -29,7 +30,8 @@ class NavigationHorizontalErrorWriter(private val sessionDirectory: File) {
                     v.crossTrackInnovationMps.f(), v.accelerationEastMps2.f(),
                     v.accelerationNorthMps2.f(), v.alongTrackAccelerationMps2.f(),
                     v.crossTrackAccelerationMps2.f(), v.estimatedPitchRad.f(),
-                    v.roadGradeRad.f(), v.pitchGradeResidualRad.f(), v.gravityLeakMps2.f(),
+                    v.vehicleGradeRad.f(), v.roadGradeRad.f(),
+                    v.pitchGradeResidualRad.f(), v.gravityLeakMps2.f(),
                     v.positionDifferenceVelocityEastMps.f(),
                     v.positionDifferenceVelocityNorthMps.f(),
                     v.gnssVelocityConsistencyErrorMps.f(),

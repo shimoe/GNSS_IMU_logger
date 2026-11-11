@@ -66,7 +66,14 @@ class NavigationHorizontalErrorAnalyzer(
             atan2(verticalSpeed, horizontalSpeed)
         } else null
         val pitch = stateBeforeGnss.attitudeBodyToEnu.toEulerAngles().pitchRad
-        val pitchGradeResidual = roadGrade?.let { wrap(pitch - it) }
+        val forwardAxisEnu = stateBeforeGnss.attitudeBodyToEnu.rotate(
+            BodyVector(1.0, 0.0, 0.0)
+        )
+        val vehicleGrade = atan2(
+            forwardAxisEnu.z,
+            kotlin.math.hypot(forwardAxisEnu.x, forwardAxisEnu.y)
+        )
+        val pitchGradeResidual = roadGrade?.let { wrap(vehicleGrade - it) }
         val gravityLeak = pitchGradeResidual?.let { 9.80665 * sin(it) }
         val positionVelocity = positionDifferenceVelocity(gnss)
         val consistencyError = if (positionVelocity != null && gnssVelocity != null) {
@@ -116,6 +123,7 @@ class NavigationHorizontalErrorAnalyzer(
             alongTrackAccelerationMps2 = alongAcceleration,
             crossTrackAccelerationMps2 = crossAcceleration,
             estimatedPitchRad = pitch,
+            vehicleGradeRad = vehicleGrade,
             roadGradeRad = roadGrade,
             pitchGradeResidualRad = pitchGradeResidual,
             gravityLeakMps2 = gravityLeak,
@@ -242,6 +250,7 @@ data class NavigationHorizontalErrorRecord(
     val alongTrackAccelerationMps2: Double?,
     val crossTrackAccelerationMps2: Double?,
     val estimatedPitchRad: Double,
+    val vehicleGradeRad: Double,
     val roadGradeRad: Double?,
     val pitchGradeResidualRad: Double?,
     val gravityLeakMps2: Double?,
