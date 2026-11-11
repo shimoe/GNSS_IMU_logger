@@ -1,22 +1,23 @@
 package com.example.gnss_imu_logger.navigation
 
-import com.example.gnss_imu_logger.attitude.AttitudeQuaternion
 import com.example.gnss_imu_logger.attitude.BodyVector
 import kotlin.math.abs
-import kotlin.math.sign
 import kotlin.math.sqrt
 
 /**
- * GNSS水平速度innovationから車体水平軸の加速度バイアスを低ゲインで更新する。
- * 入力: GNSS更新前状態、GNSS速度、GNSS間隔[s]、姿勢、走行状態
- * 出力: 更新後バイアスと診断結果
+ * 車体軸速度innovationの区間回帰を管理する。
+ * 初期設定では推定のみを行い、NavigationStateのバイアスは変更しない。
  */
 class NavigationAccelerometerBiasUpdater(
-    private val parameters: NavigationAccelerometerBiasParameters =
-        NavigationAccelerometerBiasParameters.DEFAULT
+    private val parameters: NavigationAccelerometerBiasWindowParameters =
+        NavigationAccelerometerBiasWindowParameters.DEFAULT
 ) {
-    private val forwardCandidate = AxisCandidate()
-    private val leftCandidate = AxisCandidate()
+    private val window = NavigationAccelerometerBiasWindow(
+        parameters.maximumDurationNs,
+        parameters.maximumValidSampleGapNs,
+        parameters.maximumHoldNs
+    )
+    private val estimator = NavigationAccelerometerBiasEstimator(parameters)
 
     fun update(
         elapsedRealtimeNs: Long,
@@ -30,243 +31,226 @@ class NavigationAccelerometerBiasUpdater(
         yawRateRadps: Double?,
         accelerationBodyMps2: BodyVector?
     ): NavigationAccelerometerBiasUpdateResult {
-        val reason = rejectionReason(
-            stateBeforeGnss = stateBeforeGnss,
-            gnssVelocity = gnssVelocity,
+        val gate = classifyGate(
+            stateBeforeGnss,
+            gnssVelocity,
+            gnssIntervalSec,
+            gnssSpeedStdMps,
+            velocityAccepted,
+            directionState,
+            headingTrackingState,
+            yawRateRadps,
+            accelerationBodyMps2
+        )
+        var completed: NavigationBiasWindowSnapshot? = null
+        var innovationEast: Double? = null
+        var innovationNorth: Double? = null
+        when (gate.action) {
+            NavigationBiasWindowAction.RESET -> {
+                completed = window.finish(elapsedRealtimeNs, gate.reason)
+            }
+            NavigationBiasWindowAction.HOLD -> {
+                completed = window.hold(elapsedRealtimeNs, gate.reason)
+            }
+            NavigationBiasWindowAction.ADD -> {
+                innovationEast = stateBeforeGnss.velocityEnuMps.eastMps - gnssVelocity!!.eastMps
+                innovationNorth = stateBeforeGnss.velocityEnuMps.northMps - gnssVelocity.northMps
+                val bodyInnovation = stateBeforeGnss.attitudeBodyToEnu.normalized().conjugate().rotate(
+                    BodyVector(innovationEast, innovationNorth, 0.0)
+                )
+                completed = window.add(
+                    NavigationAccelerometerBiasSample(
+                        elapsedRealtimeNs = elapsedRealtimeNs,
+                        velocityInnovationEastMps = innovationEast,
+                        velocityInnovationNorthMps = innovationNorth,
+                        velocityInnovationBodyForwardMps = bodyInnovation.x,
+                        velocityInnovationBodyLeftMps = bodyInnovation.y,
+                        yawRad = stateBeforeGnss.attitudeBodyToEnu.toEulerAngles().yawRad,
+                        speedMps = sqrt(
+                            gnssVelocity.eastMps * gnssVelocity.eastMps +
+                                gnssVelocity.northMps * gnssVelocity.northMps
+                        ),
+                        yawRateRadps = yawRateRadps!!
+                    )
+                )
+            }
+        }
+        val ready = window.snapshotWhenReady(
+            parameters.minimumUpdateSampleCount,
+            parameters.minimumUpdateDurationNs
+        )
+        val snapshot = completed ?: ready
+        val estimate = snapshot?.let(estimator::estimate)
+        // 終了済みの旧窓を評価した場合、現在収集中の新しい窓の状態は変更しない。
+        if (estimate != null && ready != null) window.markEstimated()
+        val before = stateBeforeGnss.accelerometerBiasMps2
+        val forwardReason = axisRejectionReason(estimate, true)
+        val leftReason = axisRejectionReason(estimate, false)
+        val wouldAcceptForward = forwardReason.isEmpty()
+        val wouldAcceptLeft = leftReason.isEmpty()
+        val proposedForward = proposedCorrection(
+            estimate?.bodyForwardSlopeMps2,
+            estimate?.bodyForwardResidualMadMps,
+            wouldAcceptForward
+        )
+        val proposedLeft = proposedCorrection(
+            estimate?.bodyLeftSlopeMps2,
+            estimate?.bodyLeftResidualMadMps,
+            wouldAcceptLeft
+        )
+        val applyForward = parameters.applyBiasUpdate && wouldAcceptForward
+        val applyLeft = parameters.applyBiasUpdate && wouldAcceptLeft
+        val after = BodyVector(
+            x = (before.x + if (applyForward) proposedForward else 0.0).coerceIn(
+                -parameters.maximumAbsoluteBiasMps2, parameters.maximumAbsoluteBiasMps2
+            ),
+            y = (before.y + if (applyLeft) proposedLeft else 0.0).coerceIn(
+                -parameters.maximumAbsoluteBiasMps2, parameters.maximumAbsoluteBiasMps2
+            ),
+            z = before.z
+        )
+        val record = NavigationAccelerometerBiasUpdateRecord(
+            elapsedRealtimeNs = elapsedRealtimeNs,
             gnssIntervalSec = gnssIntervalSec,
-            gnssSpeedStdMps = gnssSpeedStdMps,
-            velocityAccepted = velocityAccepted,
-            directionState = directionState,
-            headingTrackingState = headingTrackingState,
-            yawRateRadps = yawRateRadps,
-            accelerationBodyMps2 = accelerationBodyMps2
+            velocityInnovationEastMps = innovationEast,
+            velocityInnovationNorthMps = innovationNorth,
+            biasForwardBeforeMps2 = before.x,
+            biasLeftBeforeMps2 = before.y,
+            biasForwardCorrectionMps2 = after.x - before.x,
+            biasLeftCorrectionMps2 = after.y - before.y,
+            biasForwardAfterMps2 = after.x,
+            biasLeftAfterMps2 = after.y,
+            windowSequence = estimate?.windowSequence ?: window.sequence,
+            windowStartedNs = estimate?.windowStartedElapsedRealtimeNs ?: window.startedNs(),
+            windowLastSampleNs = estimate?.windowLastSampleElapsedRealtimeNs ?: window.lastSampleNs(),
+            windowCompletedNs = estimate?.windowCompletedElapsedRealtimeNs,
+            windowState = if (estimate != null) NavigationBiasWindowState.ESTIMATED else window.state,
+            holdReason = window.holdReason,
+            windowEndReason = estimate?.windowEndReason ?: window.windowEndReason,
+            holdDurationSec = window.holdDurationNs(elapsedRealtimeNs) / NS_PER_SEC,
+            validSampleGapSec = window.lastValidSampleGapNs()?.div(NS_PER_SEC),
+            windowSampleCount = estimate?.sampleCount ?: window.size(),
+            validDurationSec = estimate?.durationSec ?: window.validDurationNs() / NS_PER_SEC,
+            windowYawChangeRad = estimate?.yawChangeRad,
+            eastSlopeMps2 = estimate?.eastSlopeMps2,
+            northSlopeMps2 = estimate?.northSlopeMps2,
+            eastResidualMadMps = estimate?.eastResidualMadMps,
+            northResidualMadMps = estimate?.northResidualMadMps,
+            bodyForwardInnovationFirstMps = estimate?.bodyForwardInnovationFirstMps,
+            bodyForwardInnovationLastMps = estimate?.bodyForwardInnovationLastMps,
+            bodyLeftInnovationFirstMps = estimate?.bodyLeftInnovationFirstMps,
+            bodyLeftInnovationLastMps = estimate?.bodyLeftInnovationLastMps,
+            bodyForwardSlopeMps2 = estimate?.bodyForwardSlopeMps2,
+            bodyLeftSlopeMps2 = estimate?.bodyLeftSlopeMps2,
+            bodyForwardResidualMadMps = estimate?.bodyForwardResidualMadMps,
+            bodyLeftResidualMadMps = estimate?.bodyLeftResidualMadMps,
+            forwardSignRatio = estimate?.forwardSignRatio,
+            leftSignRatio = estimate?.leftSignRatio,
+            estimateAvailable = estimate != null,
+            updateEnabled = parameters.applyBiasUpdate,
+            wouldAcceptForward = wouldAcceptForward,
+            wouldAcceptLeft = wouldAcceptLeft,
+            proposedForwardCorrectionMps2 = proposedForward,
+            proposedLeftCorrectionMps2 = proposedLeft,
+            forwardAccepted = applyForward,
+            leftAccepted = applyLeft,
+            forwardRejectionReason = forwardReason,
+            leftRejectionReason = leftReason,
+            rejectionReason = gate.reason
         )
-        if (reason.isNotEmpty()) {
-            forwardCandidate.reset()
-            leftCandidate.reset()
-            return rejected(elapsedRealtimeNs, stateBeforeGnss, reason, gnssIntervalSec)
-        }
-
-        val velocityInnovationEnu = BodyVector(
-            x = stateBeforeGnss.velocityEnuMps.eastMps - gnssVelocity!!.eastMps,
-            y = stateBeforeGnss.velocityEnuMps.northMps - gnssVelocity.northMps,
-            z = 0.0
-        )
-        val accelerationErrorEnu = BodyVector(
-            x = velocityInnovationEnu.x / gnssIntervalSec!!,
-            y = velocityInnovationEnu.y / gnssIntervalSec,
-            z = 0.0
-        )
-        val accelerationErrorBody = stateBeforeGnss.attitudeBodyToEnu
-            .rotateEnuToBody(accelerationErrorEnu)
-        val forwardReady = forwardCandidate.add(
-            elapsedRealtimeNs,
-            accelerationErrorBody.x,
-            parameters
-        )
-        val leftReady = leftCandidate.add(
-            elapsedRealtimeNs,
-            accelerationErrorBody.y,
-            parameters
-        )
-        val forwardCandidateCount = forwardCandidate.count
-        val leftCandidateCount = leftCandidate.count
-        val forwardCandidateDurationSec = forwardCandidate.durationSec(elapsedRealtimeNs)
-        val leftCandidateDurationSec = leftCandidate.durationSec(elapsedRealtimeNs)
-        val biasBefore = stateBeforeGnss.accelerometerBiasMps2
-        val forwardCorrection = correction(accelerationErrorBody.x, forwardReady)
-        val leftCorrection = correction(accelerationErrorBody.y, leftReady)
-        val biasAfter = BodyVector(
-            x = (biasBefore.x + forwardCorrection).coerceIn(
-                -parameters.maximumAbsoluteBiasMps2,
-                parameters.maximumAbsoluteBiasMps2
-            ),
-            y = (biasBefore.y + leftCorrection).coerceIn(
-                -parameters.maximumAbsoluteBiasMps2,
-                parameters.maximumAbsoluteBiasMps2
-            ),
-            z = biasBefore.z
-        )
-        if (forwardReady) forwardCandidate.reset()
-        if (leftReady) leftCandidate.reset()
-        return NavigationAccelerometerBiasUpdateResult(
-            accelerometerBiasMps2 = biasAfter,
-            record = NavigationAccelerometerBiasUpdateRecord(
-                elapsedRealtimeNs = elapsedRealtimeNs,
-                gnssIntervalSec = gnssIntervalSec,
-                velocityInnovationEastMps = velocityInnovationEnu.x,
-                velocityInnovationNorthMps = velocityInnovationEnu.y,
-                accelerationErrorEnuEastMps2 = accelerationErrorEnu.x,
-                accelerationErrorEnuNorthMps2 = accelerationErrorEnu.y,
-                accelerationErrorBodyForwardMps2 = accelerationErrorBody.x,
-                accelerationErrorBodyLeftMps2 = accelerationErrorBody.y,
-                biasForwardBeforeMps2 = biasBefore.x,
-                biasLeftBeforeMps2 = biasBefore.y,
-                biasForwardCorrectionMps2 = biasAfter.x - biasBefore.x,
-                biasLeftCorrectionMps2 = biasAfter.y - biasBefore.y,
-                biasForwardAfterMps2 = biasAfter.x,
-                biasLeftAfterMps2 = biasAfter.y,
-                forwardCandidateCount = forwardCandidateCount,
-                leftCandidateCount = leftCandidateCount,
-                forwardCandidateDurationSec = forwardCandidateDurationSec,
-                leftCandidateDurationSec = leftCandidateDurationSec,
-                forwardAccepted = forwardReady,
-                leftAccepted = leftReady,
-                rejectionReason = ""
-            )
-        )
+        if (ready != null) window.finish(elapsedRealtimeNs, "ESTIMATED_AT_THRESHOLD")
+        return NavigationAccelerometerBiasUpdateResult(after, record)
     }
 
-    private fun rejectionReason(
-        stateBeforeGnss: NavigationState,
-        gnssVelocity: EnuVelocity?,
-        gnssIntervalSec: Double?,
-        gnssSpeedStdMps: Double?,
-        velocityAccepted: Boolean,
-        directionState: NavigationHeadingDirectionState,
-        headingTrackingState: NavigationHeadingTrackingState,
-        yawRateRadps: Double?,
-        accelerationBodyMps2: BodyVector?
+    private fun axisRejectionReason(
+        estimate: NavigationAccelerometerBiasEstimate?,
+        forward: Boolean
     ): String {
-        if (!velocityAccepted || gnssVelocity == null) return "VELOCITY_UPDATE"
-        if (gnssIntervalSec == null ||
-            gnssIntervalSec !in parameters.minimumGnssIntervalSec..parameters.maximumGnssIntervalSec
-        ) return "GNSS_INTERVAL"
-        if (gnssSpeedStdMps == null || gnssSpeedStdMps > parameters.maximumSpeedStdMps) {
-            return "SPEED_ACCURACY"
-        }
-        if (directionState != NavigationHeadingDirectionState.FORWARD &&
-            directionState != NavigationHeadingDirectionState.REVERSE
-        ) return "DIRECTION_UNRESOLVED"
-        if (headingTrackingState != NavigationHeadingTrackingState.TRACKING) {
-            return "HEADING_NOT_TRACKING"
-        }
-        if (yawRateRadps == null || abs(yawRateRadps) > parameters.maximumYawRateRadps) {
-            return "YAW_RATE"
-        }
-        if (accelerationBodyMps2 == null) return "ACCELERATION_UNAVAILABLE"
-        // 生の車体加速度には路面勾配に応じた重力成分が含まれるため、
-        // 重力除去後ENU加速度を車体へ戻して走行加速度だけを判定する。
-        val dynamicAccelerationBody = stateBeforeGnss.attitudeBodyToEnu
-            .rotateEnuToBody(stateBeforeGnss.accelerationEnuMps2)
-        if (abs(dynamicAccelerationBody.x) > parameters.maximumForwardAccelerationMps2) {
-            return "FORWARD_ACCELERATION"
-        }
-        val horizontalAccelerationMps2 = sqrt(
-            stateBeforeGnss.accelerationEnuMps2.x * stateBeforeGnss.accelerationEnuMps2.x +
-                stateBeforeGnss.accelerationEnuMps2.y * stateBeforeGnss.accelerationEnuMps2.y
-        )
-        if (horizontalAccelerationMps2 > parameters.maximumHorizontalAccelerationMps2) {
-            return "HORIZONTAL_ACCELERATION"
-        }
-        val horizontalSpeedMps = sqrt(
-            gnssVelocity.eastMps * gnssVelocity.eastMps +
-                gnssVelocity.northMps * gnssVelocity.northMps
-        )
-        return if (horizontalSpeedMps < parameters.minimumSpeedMps) "SPEED" else ""
+        if (estimate == null) return "ESTIMATE_UNAVAILABLE"
+        if (estimate.sampleCount < parameters.minimumUpdateSampleCount) return "LOW_SAMPLE"
+        if (estimate.durationSec < parameters.minimumUpdateDurationNs / NS_PER_SEC) return "SHORT_DURATION"
+        val yawLimit = if (forward) parameters.maximumForwardYawChangeRad
+        else parameters.maximumLeftYawChangeRad
+        if (abs(estimate.yawChangeRad) > yawLimit) return "YAW_CHANGE"
+        val residual = if (forward) estimate.bodyForwardResidualMadMps else estimate.bodyLeftResidualMadMps
+        val residualLimit = if (forward) parameters.maximumForwardResidualMadMps
+        else parameters.maximumLeftResidualMadMps
+        if (residual > residualLimit) return "RESIDUAL_MAD"
+        val signRatio = if (forward) estimate.forwardSignRatio else estimate.leftSignRatio
+        val signLimit = if (forward) parameters.minimumForwardSignRatio else parameters.minimumLeftSignRatio
+        if (signRatio < signLimit) return "SIGN_RATIO"
+        val slope = if (forward) estimate.bodyForwardSlopeMps2 else estimate.bodyLeftSlopeMps2
+        val minimumSlope = if (forward) parameters.minimumForwardSlopeMps2 else parameters.minimumLeftSlopeMps2
+        val maximumSlope = if (forward) parameters.maximumForwardSlopeMps2 else parameters.maximumLeftSlopeMps2
+        if (abs(slope) < minimumSlope) return "SLOPE_SMALL"
+        if (abs(slope) > maximumSlope) return "SLOPE_LARGE"
+        return ""
     }
 
-    private fun correction(errorMps2: Double, accepted: Boolean): Double =
-        if (!accepted) 0.0 else (parameters.updateGain * errorMps2).coerceIn(
+    private fun proposedCorrection(slope: Double?, residualMad: Double?, accepted: Boolean): Double {
+        if (!accepted || slope == null || residualMad == null) return 0.0
+        val gain = if (residualMad <= 0.3) 0.02 else 0.01
+        return (gain * slope).coerceIn(
             -parameters.maximumCorrectionPerUpdateMps2,
             parameters.maximumCorrectionPerUpdateMps2
         )
+    }
 
-    private fun rejected(
-        elapsedRealtimeNs: Long,
+    private fun classifyGate(
         state: NavigationState,
-        reason: String,
-        gnssIntervalSec: Double?
-    ) = NavigationAccelerometerBiasUpdateResult(
-        accelerometerBiasMps2 = state.accelerometerBiasMps2,
-        record = NavigationAccelerometerBiasUpdateRecord.rejected(
-            elapsedRealtimeNs,
-            gnssIntervalSec,
-            state.accelerometerBiasMps2,
-            reason
-        )
-    )
-
-    private class AxisCandidate {
-        var count: Int = 0
-            private set
-        private var signValue: Double = 0.0
-        private var startedNs: Long? = null
-        private var lastNs: Long? = null
-
-        fun add(
-            elapsedRealtimeNs: Long,
-            value: Double,
-            parameters: NavigationAccelerometerBiasParameters
-        ): Boolean {
-            if (!value.isFinite() || abs(value) < parameters.minimumCandidateErrorMps2) {
-                reset()
-                return false
-            }
-            if (lastNs?.let { elapsedRealtimeNs - it > parameters.maximumCandidateGapNs } == true ||
-                sign(value) != signValue
-            ) {
-                reset()
-            }
-            if (count == 0) {
-                signValue = sign(value)
-                startedNs = elapsedRealtimeNs
-            }
-            count++
-            lastNs = elapsedRealtimeNs
-            return count >= parameters.requiredCandidateCount &&
-                durationNs(elapsedRealtimeNs) >= parameters.requiredCandidateDurationNs
+        gnssVelocity: EnuVelocity?,
+        intervalSec: Double?,
+        speedStdMps: Double?,
+        velocityAccepted: Boolean,
+        direction: NavigationHeadingDirectionState,
+        tracking: NavigationHeadingTrackingState,
+        yawRateRadps: Double?,
+        accelerationBodyMps2: BodyVector?
+    ): GateResult {
+        if (direction != NavigationHeadingDirectionState.FORWARD &&
+            direction != NavigationHeadingDirectionState.REVERSE
+        ) return GateResult(NavigationBiasWindowAction.RESET, "DIRECTION_UNRESOLVED")
+        if (tracking == NavigationHeadingTrackingState.REACQUIRING) {
+            return GateResult(NavigationBiasWindowAction.RESET, "HEADING_REACQUIRING")
         }
-
-        fun durationSec(nowNs: Long): Double = durationNs(nowNs) / NS_PER_SEC
-        private fun durationNs(nowNs: Long): Long = startedNs?.let { nowNs - it } ?: 0L
-        fun reset() {
-            count = 0
-            signValue = 0.0
-            startedNs = null
-            lastNs = null
+        if (intervalSec == null || intervalSec <= 0.0 || intervalSec > 4.0) {
+            return GateResult(NavigationBiasWindowAction.RESET, "GNSS_INTERVAL")
         }
-    }
-
-    companion object {
-        private const val NS_PER_SEC = 1_000_000_000.0
-    }
-}
-
-data class NavigationAccelerometerBiasParameters(
-    val updateGain: Double,
-    val maximumCorrectionPerUpdateMps2: Double,
-    val maximumAbsoluteBiasMps2: Double,
-    val minimumCandidateErrorMps2: Double,
-    val requiredCandidateCount: Int,
-    val requiredCandidateDurationNs: Long,
-    val maximumCandidateGapNs: Long,
-    val minimumGnssIntervalSec: Double,
-    val maximumGnssIntervalSec: Double,
-    val maximumSpeedStdMps: Double,
-    val maximumYawRateRadps: Double,
-    val maximumForwardAccelerationMps2: Double,
-    val maximumHorizontalAccelerationMps2: Double,
-    val minimumSpeedMps: Double
-) {
-    companion object {
-        val DEFAULT = NavigationAccelerometerBiasParameters(
-            updateGain = 0.02,
-            maximumCorrectionPerUpdateMps2 = 0.02,
-            maximumAbsoluteBiasMps2 = 0.5,
-            minimumCandidateErrorMps2 = 0.05,
-            requiredCandidateCount = 3,
-            requiredCandidateDurationNs = 2_000_000_000L,
-            maximumCandidateGapNs = 2_000_000_000L,
-            minimumGnssIntervalSec = 0.5,
-            maximumGnssIntervalSec = 2.0,
-            maximumSpeedStdMps = 2.0,
-            maximumYawRateRadps = 0.35,
-            maximumForwardAccelerationMps2 = 2.0,
-            maximumHorizontalAccelerationMps2 = 3.0,
-            minimumSpeedMps = 5.0
+        if (gnssVelocity == null) return GateResult(NavigationBiasWindowAction.RESET, "VELOCITY_UNAVAILABLE")
+        val speed = sqrt(gnssVelocity.eastMps * gnssVelocity.eastMps +
+            gnssVelocity.northMps * gnssVelocity.northMps)
+        if (speed < 3.0) return GateResult(NavigationBiasWindowAction.RESET, "SPEED_RESET")
+        if (!velocityAccepted) return GateResult(NavigationBiasWindowAction.HOLD, "VELOCITY_UPDATE")
+        if (tracking != NavigationHeadingTrackingState.TRACKING) {
+            return GateResult(NavigationBiasWindowAction.HOLD, "HEADING_NOT_TRACKING")
+        }
+        if (speedStdMps == null || speedStdMps > 2.0) {
+            return GateResult(NavigationBiasWindowAction.HOLD, "SPEED_ACCURACY")
+        }
+        if (yawRateRadps == null || abs(yawRateRadps) > 0.25) {
+            return GateResult(NavigationBiasWindowAction.HOLD, "YAW_RATE")
+        }
+        if (accelerationBodyMps2 == null) {
+            return GateResult(NavigationBiasWindowAction.HOLD, "ACCELERATION_UNAVAILABLE")
+        }
+        val dynamicBody = state.attitudeBodyToEnu.normalized().conjugate().rotate(state.accelerationEnuMps2)
+        if (abs(dynamicBody.x) > 2.5) {
+            return GateResult(NavigationBiasWindowAction.HOLD, "FORWARD_ACCELERATION")
+        }
+        val horizontalAcceleration = sqrt(
+            state.accelerationEnuMps2.x * state.accelerationEnuMps2.x +
+                state.accelerationEnuMps2.y * state.accelerationEnuMps2.y
         )
+        if (horizontalAcceleration > 4.0) {
+            return GateResult(NavigationBiasWindowAction.HOLD, "HORIZONTAL_ACCELERATION")
+        }
+        if (speed < 5.0) return GateResult(NavigationBiasWindowAction.HOLD, "SPEED")
+        return GateResult(NavigationBiasWindowAction.ADD, "")
     }
+
+    private data class GateResult(val action: NavigationBiasWindowAction, val reason: String)
+    private enum class NavigationBiasWindowAction { ADD, HOLD, RESET }
+    companion object { private const val NS_PER_SEC = 1_000_000_000.0 }
 }
 
 data class NavigationAccelerometerBiasUpdateResult(
@@ -279,45 +263,47 @@ data class NavigationAccelerometerBiasUpdateRecord(
     val gnssIntervalSec: Double?,
     val velocityInnovationEastMps: Double?,
     val velocityInnovationNorthMps: Double?,
-    val accelerationErrorEnuEastMps2: Double?,
-    val accelerationErrorEnuNorthMps2: Double?,
-    val accelerationErrorBodyForwardMps2: Double?,
-    val accelerationErrorBodyLeftMps2: Double?,
     val biasForwardBeforeMps2: Double,
     val biasLeftBeforeMps2: Double,
     val biasForwardCorrectionMps2: Double,
     val biasLeftCorrectionMps2: Double,
     val biasForwardAfterMps2: Double,
     val biasLeftAfterMps2: Double,
-    val forwardCandidateCount: Int,
-    val leftCandidateCount: Int,
-    val forwardCandidateDurationSec: Double,
-    val leftCandidateDurationSec: Double,
+    val windowSequence: Long,
+    val windowStartedNs: Long?,
+    val windowLastSampleNs: Long?,
+    val windowCompletedNs: Long?,
+    val windowState: NavigationBiasWindowState,
+    val holdReason: String,
+    val windowEndReason: String,
+    val holdDurationSec: Double,
+    val validSampleGapSec: Double?,
+    val windowSampleCount: Int,
+    val validDurationSec: Double,
+    val windowYawChangeRad: Double?,
+    val eastSlopeMps2: Double?,
+    val northSlopeMps2: Double?,
+    val eastResidualMadMps: Double?,
+    val northResidualMadMps: Double?,
+    val bodyForwardInnovationFirstMps: Double?,
+    val bodyForwardInnovationLastMps: Double?,
+    val bodyLeftInnovationFirstMps: Double?,
+    val bodyLeftInnovationLastMps: Double?,
+    val bodyForwardSlopeMps2: Double?,
+    val bodyLeftSlopeMps2: Double?,
+    val bodyForwardResidualMadMps: Double?,
+    val bodyLeftResidualMadMps: Double?,
+    val forwardSignRatio: Double?,
+    val leftSignRatio: Double?,
+    val estimateAvailable: Boolean,
+    val updateEnabled: Boolean,
+    val wouldAcceptForward: Boolean,
+    val wouldAcceptLeft: Boolean,
+    val proposedForwardCorrectionMps2: Double,
+    val proposedLeftCorrectionMps2: Double,
     val forwardAccepted: Boolean,
     val leftAccepted: Boolean,
+    val forwardRejectionReason: String,
+    val leftRejectionReason: String,
     val rejectionReason: String
-) {
-    companion object {
-        fun rejected(
-            elapsedRealtimeNs: Long,
-            gnssIntervalSec: Double?,
-            bias: BodyVector,
-            reason: String
-        ) = NavigationAccelerometerBiasUpdateRecord(
-            elapsedRealtimeNs, gnssIntervalSec,
-            null, null, null, null, null, null,
-            bias.x, bias.y, 0.0, 0.0, bias.x, bias.y,
-            0, 0, 0.0, 0.0, false, false, reason
-        )
-    }
-}
-/**
- * ENU座標のベクトルを車体座標へ回転する。
- * 入力: ENU座標ベクトル
- * 出力: 車体座標ベクトル
- * ナビゲーション専用処理とし、計測画面が使用するQuaternion APIは変更しない。
- */
-private fun AttitudeQuaternion.rotateEnuToBody(vector: BodyVector): BodyVector {
-    val inverse = normalized().conjugate()
-    return inverse.rotate(vector)
-}
+)
