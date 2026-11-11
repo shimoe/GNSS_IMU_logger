@@ -267,18 +267,14 @@ class GnssAidedOfflineNavigationPredictor(
                             )
                         }
 
-                        val angularRateNormRadps = angularRateBodyRadps?.let {
-                            sqrt(
-                                it.x * it.x +
-                                    it.y * it.y +
-                                    it.z * it.z
-                            )
-                        }
+                        val yawRateRadps = angularRateBodyRadps?.z
 
                         val headingDirection = headingDirectionTracker.update(
                             elapsedRealtimeNs = event.elapsedRealtimeNs,
                             speedMps = horizontalSpeedMps,
-                            angularRateNormRadps = angularRateNormRadps,
+                            bearingAccuracyRad = event.update.bearingAccuracyRad,
+                            speedAccuracyMps = event.update.speedStdMps,
+                            yawRateRadps = yawRateRadps,
                             regularInnovationRad = headingProbe.innovationRad,
                             oppositeInnovationRad = oppositeHeadingInnovationRad
                         )
@@ -286,25 +282,25 @@ class GnssAidedOfflineNavigationPredictor(
                         headingDirections += headingDirection
 
                         // 確定した進行方向に合わせてGNSS方位を選択する。
-                        val headingMeasurement = when (headingDirection.state) {
-                            NavigationHeadingDirectionState.FORWARD -> {
-                                event.update
-                            }
-
-                            NavigationHeadingDirectionState.REVERSE -> {
-                                event.update.copy(
-                                    bearingRad = event.update.bearingRad?.let {
-                                        wrapHeadingAngle(it + kotlin.math.PI)
-                                    }
-                                )
-                            }
-
-                            NavigationHeadingDirectionState.UNRESOLVED -> {
+                        val headingMeasurement = if (!headingDirection.headingUpdateAllowed) {
+                            event.update.copy(
+                                bearingRad = null,
+                                bearingAccuracyRad = null
+                            )
+                        } else when (headingDirection.stateAfter) {
+                            NavigationHeadingDirectionState.FORWARD -> event.update
+                            NavigationHeadingDirectionState.REVERSE -> event.update.copy(
+                                bearingRad = event.update.bearingRad?.let {
+                                    wrapHeadingAngle(it + kotlin.math.PI)
+                                }
+                            )
+                            NavigationHeadingDirectionState.UNRESOLVED,
+                            NavigationHeadingDirectionState.FORWARD_CANDIDATE,
+                            NavigationHeadingDirectionState.REVERSE_CANDIDATE ->
                                 event.update.copy(
                                     bearingRad = null,
                                     bearingAccuracyRad = null
                                 )
-                            }
                         }
 
                         // headingMeasurement生成後に参照する。
