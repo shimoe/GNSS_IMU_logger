@@ -2,14 +2,7 @@ package com.example.gnss_imu_logger.navigation
 
 import java.io.File
 
-/**
- * 保存済みセッションのオフラインナビゲーション解析を一括実行する。
- * 入力: セッションディレクトリ
- * 出力: 予測、残差、サマリー、GNSS更新、重力補正のCSV
- *
- * 再生画面でセッションを開いた時点の実装を使って毎回再計算し、
- * セッションディレクトリ内の既存解析CSVを上書きする。
- */
+/** 保存済みセッションのオフラインナビゲーション解析を一括実行する。 */
 class OfflineNavigationProcessor {
     fun process(sessionDirectory: File): OfflineNavigationProcessResult {
         require(sessionDirectory.isDirectory) {
@@ -64,6 +57,9 @@ class OfflineNavigationProcessor {
             NavigationGravityUpdateWriter(sessionDirectory).write(result.gravityUpdates)
             NavigationHeadingDirectionWriter(sessionDirectory).write(result.headingDirections)
             NavigationHeadingTrackingWriter(sessionDirectory).write(result.headingTrackingRecords)
+            NavigationAccelerometerBiasWriter(sessionDirectory).write(
+                result.accelerometerBiasUpdates
+            )
             val processResult = OfflineNavigationProcessResult(
                 deviceMount = prepared.deviceMount.name,
                 predictionSampleCount = result.prediction.samples.size,
@@ -89,11 +85,6 @@ class OfflineNavigationProcessor {
             ?.deleteRecursively()
     }
 
-    /**
-     * オフライン解析へ使用した取付方向を保存する。
-     * 入力: セッションディレクトリ、前処理済み入力
-     * 出力: navigation_input_metadata.csv
-     */
     private fun writeInputMetadata(
         sessionDirectory: File,
         input: PreparedNavigationInput
@@ -109,6 +100,7 @@ class OfflineNavigationProcessor {
 
     companion object {
         private val OUTPUT_FILE_NAMES = listOf(
+            "navigation_accelerometer_bias_update.csv",
             "navigation_analysis_status.csv",
             "navigation_attitude_prediction.csv",
             "navigation_barometric_altitude.csv",

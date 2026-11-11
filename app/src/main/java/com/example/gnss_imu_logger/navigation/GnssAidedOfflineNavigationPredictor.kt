@@ -67,6 +67,8 @@ class GnssAidedOfflineNavigationPredictor(
         val headingDirectionTracker = NavigationHeadingDirectionTracker()
         val headingTrackingController = NavigationHeadingTrackingController()
         val headingTrackingRecords = mutableListOf<NavigationHeadingTrackingRecord>()
+        val accelerometerBiasUpdater = NavigationAccelerometerBiasUpdater()
+        val accelerometerBiasUpdates = mutableListOf<NavigationAccelerometerBiasUpdateRecord>()
         val verticalUpdater = NavigationVerticalUpdater()
         var verticalObservationIndex = 0
         var previousGravityUpdateNs: Long? = null
@@ -207,6 +209,7 @@ class GnssAidedOfflineNavigationPredictor(
                         }
                     }
                     is PreparedNavigationEvent.Gnss -> {
+                        val stateBeforeGnss = state    
                         val residual = createResidual(state, variance, eskfCovariance, event.update)
                         residuals += residual
                         var result = updater.update(state, variance, event.update)
@@ -363,6 +366,31 @@ class GnssAidedOfflineNavigationPredictor(
                             attitudeBodyToEnu = trackingResult.attitudeBodyToEnu
                         )
                         headingTrackingRecords += trackingResult.record
+                                                val gnssIntervalSec = previousGnssUpdate?.let {
+                            (event.update.elapsedRealtimeNs - it.elapsedRealtimeNs) / NS_PER_SEC
+                        }
+
+                        val biasResult = accelerometerBiasUpdater.update(
+                            elapsedRealtimeNs = event.elapsedRealtimeNs,
+                            stateBeforeGnss = stateBeforeGnss.copy(
+                                attitudeBodyToEnu = state.attitudeBodyToEnu,
+                                accelerometerBiasMps2 = state.accelerometerBiasMps2
+                            ),
+                            gnssVelocity = event.update.velocityEnuMps,
+                            gnssIntervalSec = gnssIntervalSec,
+                            gnssSpeedStdMps = event.update.speedStdMps,
+                            velocityAccepted = result.velocityAccepted,
+                            directionState = headingDirection.stateAfter,
+                            headingTrackingState = trackingResult.record.stateAfter,
+                            yawRateRadps = yawRateRadps,
+                            accelerationBodyMps2 = accelerationBodyMps2
+                        )
+                        
+                        state = state.copy(
+                            accelerometerBiasMps2 = biasResult.accelerometerBiasMps2
+                        )
+
+                        accelerometerBiasUpdates += biasResult.record
                         variance = result.variance
                         updates += NavigationMeasurementUpdateRecord(
                             elapsedRealtimeNs = event.elapsedRealtimeNs,
@@ -433,7 +461,8 @@ class GnssAidedOfflineNavigationPredictor(
             gravityUpdates = gravityUpdates,
             attitudePredictionCount = attitudePredictionCount,
             headingDirections = headingDirections,
-            headingTrackingRecords = headingTrackingRecords
+            headingTrackingRecords = headingTrackingRecords,
+            accelerometerBiasUpdates = accelerometerBiasUpdates
         )
     }
 
@@ -636,7 +665,8 @@ data class GnssAidedNavigationResult(
     val gravityUpdates: List<NavigationGravityUpdateRecord>,
     val attitudePredictionCount: Long,
     val headingDirections: List<NavigationHeadingDirectionRecord>,
-    val headingTrackingRecords: List<NavigationHeadingTrackingRecord>
+    val headingTrackingRecords: List<NavigationHeadingTrackingRecord>,
+    val accelerometerBiasUpdates: List<NavigationAccelerometerBiasUpdateRecord>
 )
 
 data class NavigationAttitudePredictionRecord(
