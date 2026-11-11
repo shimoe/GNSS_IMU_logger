@@ -69,6 +69,8 @@ class GnssAidedOfflineNavigationPredictor(
         val headingTrackingRecords = mutableListOf<NavigationHeadingTrackingRecord>()
         val accelerometerBiasUpdater = NavigationAccelerometerBiasUpdater()
         val accelerometerBiasUpdates = mutableListOf<NavigationAccelerometerBiasUpdateRecord>()
+        val horizontalErrorAnalyzer = NavigationHorizontalErrorAnalyzer(verticalObservations)
+        val horizontalErrorRecords = mutableListOf<NavigationHorizontalErrorRecord>()
         val verticalUpdater = NavigationVerticalUpdater()
         var verticalObservationIndex = 0
         var previousGravityUpdateNs: Long? = null
@@ -366,7 +368,13 @@ class GnssAidedOfflineNavigationPredictor(
                             attitudeBodyToEnu = trackingResult.attitudeBodyToEnu
                         )
                         headingTrackingRecords += trackingResult.record
-                                                val gnssIntervalSec = previousGnssUpdate?.let {
+                        horizontalErrorRecords += horizontalErrorAnalyzer.analyze(
+                            stateBeforeGnss = stateBeforeGnss,
+                            gnss = event.update,
+                            directionState = headingDirection.stateAfter,
+                            trackingState = trackingResult.record.stateAfter
+                        )
+                        val gnssIntervalSec = previousGnssUpdate?.let {
                             (event.update.elapsedRealtimeNs - it.elapsedRealtimeNs) / NS_PER_SEC
                         }
 
@@ -462,7 +470,8 @@ class GnssAidedOfflineNavigationPredictor(
             attitudePredictionCount = attitudePredictionCount,
             headingDirections = headingDirections,
             headingTrackingRecords = headingTrackingRecords,
-            accelerometerBiasUpdates = accelerometerBiasUpdates
+            accelerometerBiasUpdates = accelerometerBiasUpdates,
+            horizontalErrorRecords = horizontalErrorRecords
         )
     }
 
@@ -666,7 +675,8 @@ data class GnssAidedNavigationResult(
     val attitudePredictionCount: Long,
     val headingDirections: List<NavigationHeadingDirectionRecord>,
     val headingTrackingRecords: List<NavigationHeadingTrackingRecord>,
-    val accelerometerBiasUpdates: List<NavigationAccelerometerBiasUpdateRecord>
+    val accelerometerBiasUpdates: List<NavigationAccelerometerBiasUpdateRecord>,
+    val horizontalErrorRecords: List<NavigationHorizontalErrorRecord>
 )
 
 data class NavigationAttitudePredictionRecord(

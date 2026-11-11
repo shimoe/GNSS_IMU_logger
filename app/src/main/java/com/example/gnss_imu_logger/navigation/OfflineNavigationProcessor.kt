@@ -60,10 +60,21 @@ class OfflineNavigationProcessor {
             NavigationAccelerometerBiasWriter(sessionDirectory).write(
                 result.accelerometerBiasUpdates
             )
+            require(
+                result.horizontalErrorRecords.size == result.prediction.gnssResiduals.size
+            ) {
+                "水平誤差分析件数がGNSS残差件数と一致しません: " +
+                    "horizontal=${result.horizontalErrorRecords.size}, " +
+                    "gnss=${result.prediction.gnssResiduals.size}"
+            }
+            NavigationHorizontalErrorWriter(sessionDirectory).write(
+                result.horizontalErrorRecords
+            )
             val processResult = OfflineNavigationProcessResult(
                 deviceMount = prepared.deviceMount.name,
                 predictionSampleCount = result.prediction.samples.size,
                 gnssResidualCount = result.prediction.gnssResiduals.size,
+                horizontalErrorRecordCount = result.horizontalErrorRecords.size,
                 measurementUpdateCount = result.measurementUpdates.size,
                 gravityUpdateCount = result.gravityUpdates.size,
                 attitudePredictionCount = result.attitudePredictionCount,
@@ -100,6 +111,7 @@ class OfflineNavigationProcessor {
 
     companion object {
         private val OUTPUT_FILE_NAMES = listOf(
+            "navigation_accelerometer_bias_shadow.csv",
             "navigation_accelerometer_bias_update.csv",
             "navigation_analysis_status.csv",
             "navigation_attitude_prediction.csv",
@@ -109,6 +121,7 @@ class OfflineNavigationProcessor {
             "navigation_gsi_terrain_elevation.csv",
             "navigation_gsi_terrain_error.txt",
             "navigation_heading_direction.csv",
+            "navigation_horizontal_error_analysis.csv",
             "navigation_heading_tracking.csv",
             "navigation_initialization.csv",
             "navigation_input_metadata.csv",
@@ -125,6 +138,7 @@ data class OfflineNavigationProcessResult(
     val deviceMount: String,
     val predictionSampleCount: Int,
     val gnssResidualCount: Int,
+    val horizontalErrorRecordCount: Int,
     val measurementUpdateCount: Int,
     val gravityUpdateCount: Int,
     val attitudePredictionCount: Long,
