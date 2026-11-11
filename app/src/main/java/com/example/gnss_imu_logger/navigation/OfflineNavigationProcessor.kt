@@ -18,6 +18,8 @@ class OfflineNavigationProcessor {
         val input = OfflineNavigationInputReader(sessionDirectory).read()
         val prepared = NavigationInputPreprocessor().prepare(input)
         writeInputMetadata(sessionDirectory, prepared)
+        val barometricAltitude = BarometricAltitudePreprocessor().prepare(sessionDirectory)
+        BarometricAltitudeWriter(sessionDirectory).write(barometricAltitude)
         val result = NavigationAttitudePredictionWriter(sessionDirectory).use { writer ->
             GnssAidedOfflineNavigationPredictor(
                 attitudePredictionSink = writer
