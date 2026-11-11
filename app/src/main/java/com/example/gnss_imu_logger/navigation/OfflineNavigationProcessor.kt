@@ -63,6 +63,7 @@ class OfflineNavigationProcessor {
             NavigationMeasurementUpdateWriter(sessionDirectory).write(result.measurementUpdates)
             NavigationGravityUpdateWriter(sessionDirectory).write(result.gravityUpdates)
             NavigationHeadingDirectionWriter(sessionDirectory).write(result.headingDirections)
+            NavigationHeadingTrackingWriter(sessionDirectory).write(result.headingTrackingRecords)
             val processResult = OfflineNavigationProcessResult(
                 deviceMount = prepared.deviceMount.name,
                 predictionSampleCount = result.prediction.samples.size,
@@ -116,6 +117,7 @@ class OfflineNavigationProcessor {
             "navigation_gsi_terrain_elevation.csv",
             "navigation_gsi_terrain_error.txt",
             "navigation_heading_direction.csv",
+            "navigation_heading_tracking.csv",
             "navigation_initialization.csv",
             "navigation_input_metadata.csv",
             "navigation_measurement_update.csv",

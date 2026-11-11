@@ -32,6 +32,18 @@ data class AttitudeQuaternion(
 
     fun conjugate(): AttitudeQuaternion = AttitudeQuaternion(w, -x, -y, -z)
 
+    /**
+     * ENUのUp軸回りにyaw補正を適用する。
+     * 入力: 補正yaw角[rad]
+     * 出力: roll・pitchの車体傾斜を維持した補正後Quaternion
+     */
+    fun correctedEnuYaw(deltaYawRad: Double): AttitudeQuaternion {
+        if (!deltaYawRad.isFinite()) return this
+        val half = deltaYawRad * 0.5
+        val correction = AttitudeQuaternion(cos(half), 0.0, 0.0, sin(half))
+        return (correction * this).normalized()
+    }
+
     /** 車体座標のベクトルを基準座標へ回転する。 */
     fun rotate(vector: BodyVector): BodyVector {
         val value = this * AttitudeQuaternion(0.0, vector.x, vector.y, vector.z) * conjugate()

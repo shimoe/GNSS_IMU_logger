@@ -65,6 +65,8 @@ class GnssAidedOfflineNavigationPredictor(
         var previousAbnormalReason = ""
         val headingDirections = mutableListOf<NavigationHeadingDirectionRecord>()
         val headingDirectionTracker = NavigationHeadingDirectionTracker()
+        val headingTrackingController = NavigationHeadingTrackingController()
+        val headingTrackingRecords = mutableListOf<NavigationHeadingTrackingRecord>()
         val verticalUpdater = NavigationVerticalUpdater()
         var verticalObservationIndex = 0
         var previousGravityUpdateNs: Long? = null
@@ -340,9 +342,27 @@ class GnssAidedOfflineNavigationPredictor(
                             eskfCovariance.standardDeviation(
                                 NavigationErrorStateIndex.ATTITUDE + 2
                             )
-                            state = result.state.copy(
+                        state = result.state.copy(
                             attitudeBodyToEnu = headingResult.attitudeBodyToEnu
                         )
+                        val trackingResult = headingTrackingController.update(
+                            elapsedRealtimeNs = event.elapsedRealtimeNs,
+                            attitudeBodyToEnu = state.attitudeBodyToEnu,
+                            directionState = headingDirection.stateAfter,
+                            bearingRad = event.update.bearingRad,
+                            bearingAccuracyRad = event.update.bearingAccuracyRad,
+                            speedAccuracyMps = event.update.speedStdMps,
+                            speedMps = horizontalSpeedMps,
+                            yawRateRadps = yawRateRadps,
+                            headingUpdateAccepted = headingResult.accepted,
+                            headingUpdateAvailable = headingResult.available,
+                            directionConflict = headingDirection.headingUpdateRejectionReason ==
+                                "DIRECTION_CONFLICT"
+                        )
+                        state = state.copy(
+                            attitudeBodyToEnu = trackingResult.attitudeBodyToEnu
+                        )
+                        headingTrackingRecords += trackingResult.record
                         variance = result.variance
                         updates += NavigationMeasurementUpdateRecord(
                             elapsedRealtimeNs = event.elapsedRealtimeNs,
@@ -412,7 +432,8 @@ class GnssAidedOfflineNavigationPredictor(
             measurementUpdates = updates,
             gravityUpdates = gravityUpdates,
             attitudePredictionCount = attitudePredictionCount,
-            headingDirections = headingDirections
+            headingDirections = headingDirections,
+            headingTrackingRecords = headingTrackingRecords
         )
     }
 
@@ -614,7 +635,8 @@ data class GnssAidedNavigationResult(
     val measurementUpdates: List<NavigationMeasurementUpdateRecord>,
     val gravityUpdates: List<NavigationGravityUpdateRecord>,
     val attitudePredictionCount: Long,
-    val headingDirections: List<NavigationHeadingDirectionRecord>
+    val headingDirections: List<NavigationHeadingDirectionRecord>,
+    val headingTrackingRecords: List<NavigationHeadingTrackingRecord>
 )
 
 data class NavigationAttitudePredictionRecord(
