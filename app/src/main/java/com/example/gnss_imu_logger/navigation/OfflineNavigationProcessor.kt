@@ -15,42 +15,69 @@ class OfflineNavigationProcessor {
         require(sessionDirectory.isDirectory) {
             "セッションディレクトリが存在しません: ${sessionDirectory.path}"
         }
-        val input = OfflineNavigationInputReader(sessionDirectory).read()
-        val prepared = NavigationInputPreprocessor().prepare(input)
-        writeInputMetadata(sessionDirectory, prepared)
-        val barometricAltitude = BarometricAltitudePreprocessor().prepare(sessionDirectory)
-        BarometricAltitudeWriter(sessionDirectory).write(barometricAltitude)
-        val result = NavigationAttitudePredictionWriter(sessionDirectory).use { writer ->
-            GnssAidedOfflineNavigationPredictor(
-                attitudePredictionSink = writer
-            ).run(prepared)
+        clearPreviousOutputs(sessionDirectory)
+        val status = NavigationAnalysisStatusWriter(sessionDirectory)
+        status.start()
+        var stage = NavigationAnalysisStage.INPUT
+        return try {
+            status.update(stage)
+            val input = OfflineNavigationInputReader(sessionDirectory).read()
+            val prepared = NavigationInputPreprocessor().prepare(input)
+            writeInputMetadata(sessionDirectory, prepared)
+
+            stage = NavigationAnalysisStage.BAROMETRIC_ALTITUDE
+            status.update(stage)
+            val barometricAltitude = BarometricAltitudePreprocessor().prepare(sessionDirectory)
+            BarometricAltitudeWriter(sessionDirectory).write(barometricAltitude)
+
+            stage = NavigationAnalysisStage.GSI_TERRAIN
+            status.update(stage)
+            runCatching {
+                GsiTerrainElevationEvaluator(sessionDirectory).evaluate(barometricAltitude)
+            }.onFailure { error ->
+                sessionDirectory.resolve("navigation_gsi_terrain_error.txt")
+                    .writeText("地理院DEM評価に失敗しました: ${error.message}", Charsets.UTF_8)
+            }
+
+            stage = NavigationAnalysisStage.NAVIGATION
+            status.update(stage)
+            val result = NavigationAttitudePredictionWriter(sessionDirectory).use { writer ->
+                GnssAidedOfflineNavigationPredictor(
+                    attitudePredictionSink = writer
+                ).run(prepared)
+            }
+            NavigationInitializationWriter(sessionDirectory).write(result.initialization)
+            val summary = OfflineNavigationPredictionSummarizer().summarize(result.prediction)
+
+            stage = NavigationAnalysisStage.OUTPUT
+            status.update(stage)
+            OfflineNavigationPredictionWriter(sessionDirectory).write(result.prediction, summary)
+            NavigationMeasurementUpdateWriter(sessionDirectory).write(result.measurementUpdates)
+            NavigationGravityUpdateWriter(sessionDirectory).write(result.gravityUpdates)
+            NavigationHeadingDirectionWriter(sessionDirectory).write(result.headingDirections)
+            val processResult = OfflineNavigationProcessResult(
+                deviceMount = prepared.deviceMount.name,
+                predictionSampleCount = result.prediction.samples.size,
+                gnssResidualCount = result.prediction.gnssResiduals.size,
+                measurementUpdateCount = result.measurementUpdates.size,
+                gravityUpdateCount = result.gravityUpdates.size,
+                attitudePredictionCount = result.attitudePredictionCount,
+                assessment = summary.assessment
+            )
+            status.complete()
+            processResult
+        } catch (error: Throwable) {
+            status.fail(stage, error)
+            throw error
         }
-        NavigationInitializationWriter(sessionDirectory).write(result.initialization)
-        val summary = OfflineNavigationPredictionSummarizer().summarize(
-            result.prediction
-        )
-        OfflineNavigationPredictionWriter(sessionDirectory).write(
-            result.prediction,
-            summary
-        )
-        NavigationMeasurementUpdateWriter(sessionDirectory).write(
-            result.measurementUpdates
-        )
-        NavigationGravityUpdateWriter(sessionDirectory).write(
-            result.gravityUpdates
-        )
-        NavigationHeadingDirectionWriter(sessionDirectory).write(
-            result.headingDirections
-        )
-        return OfflineNavigationProcessResult(
-            deviceMount = prepared.deviceMount.name,
-            predictionSampleCount = result.prediction.samples.size,
-            gnssResidualCount = result.prediction.gnssResiduals.size,
-            measurementUpdateCount = result.measurementUpdates.size,
-            gravityUpdateCount = result.gravityUpdates.size,
-            attitudePredictionCount = result.attitudePredictionCount,
-            assessment = summary.assessment
-        )
+    }
+
+    /** 前回の解析結果を削除し、異なる実装世代のCSVが混在しないようにする。 */
+    private fun clearPreviousOutputs(sessionDirectory: File) {
+        OUTPUT_FILE_NAMES.forEach { name -> sessionDirectory.resolve(name).delete() }
+        sessionDirectory.resolve("navigation_gsi_dem_cache")
+            .takeIf { it.isDirectory }
+            ?.deleteRecursively()
     }
 
     /**
@@ -69,6 +96,25 @@ class OfflineNavigationProcessor {
                 writer.appendLine("device_mount,${input.deviceMount.name}")
                 writer.appendLine("device_mount_source,session.json")
             }
+    }
+
+    companion object {
+        private val OUTPUT_FILE_NAMES = listOf(
+            "navigation_analysis_status.csv",
+            "navigation_attitude_prediction.csv",
+            "navigation_barometric_altitude.csv",
+            "navigation_gnss_residual.csv",
+            "navigation_gravity_update.csv",
+            "navigation_gsi_terrain_elevation.csv",
+            "navigation_gsi_terrain_error.txt",
+            "navigation_heading_direction.csv",
+            "navigation_initialization.csv",
+            "navigation_input_metadata.csv",
+            "navigation_measurement_update.csv",
+            "navigation_prediction.csv",
+            "navigation_prediction_summary.csv",
+            "navigation_vertical_reference.csv"
+        )
     }
 }
 

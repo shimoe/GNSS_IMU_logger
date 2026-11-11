@@ -11,7 +11,11 @@ class BarometricAltitudeWriter(private val sessionDirectory: File) {
                 "elapsed_realtime_ns,pressure_hpa,filtered_pressure_hpa," +
                     "relative_altitude_m,calibrated_altitude_m,vertical_speed_mps," +
                     "reference_pressure_hpa,reference_gnss_altitude_m," +
-                    "gnss_altitude_m,gnss_vertical_accuracy_m,valid,rejection_reason"
+                    "gnss_altitude_m,gnss_vertical_accuracy_m,raw_altitude_residual_m," +
+                    "barometer_bias_30s_m,barometer_bias_60s_m,barometer_bias_120s_m," +
+                    "corrected_altitude_30s_m,corrected_altitude_60s_m," +
+                    "corrected_altitude_120s_m,gnss_bias_update_applied," +
+                    "gnss_bias_rejection_reason,valid,rejection_reason"
             )
             result.records.forEach { value ->
                 writer.appendLine(
@@ -26,6 +30,15 @@ class BarometricAltitudeWriter(private val sessionDirectory: File) {
                         value.referenceGnssAltitudeM.format(),
                         value.gnssAltitudeM?.format().orEmpty(),
                         value.gnssVerticalAccuracyM?.format().orEmpty(),
+                        value.rawAltitudeResidualM?.format().orEmpty(),
+                        value.barometerBias30sM.format(),
+                        value.barometerBias60sM.format(),
+                        value.barometerBias120sM.format(),
+                        value.correctedAltitude30sM.format(),
+                        value.correctedAltitude60sM.format(),
+                        value.correctedAltitude120sM.format(),
+                        value.gnssBiasUpdateApplied,
+                        value.gnssBiasRejectionReason,
                         value.valid,
                         value.rejectionReason
                     ).joinToString(",")

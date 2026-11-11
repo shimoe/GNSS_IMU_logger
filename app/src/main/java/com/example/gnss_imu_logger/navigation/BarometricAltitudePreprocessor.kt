@@ -49,6 +49,10 @@ class BarometricAltitudePreprocessor(
         var previousPressureHpa: Double? = null
         var previousTimestampNs: Long? = null
         var gnssIndex = 0
+        val bias30 = AltitudeBiasFilter(30.0)
+        val bias60 = AltitudeBiasFilter(60.0)
+        val bias120 = AltitudeBiasFilter(120.0)
+        var lastBiasGnssNs: Long? = null
 
         samples.forEach { sample ->
             val pressureHpa = sample.x
@@ -102,17 +106,44 @@ class BarometricAltitudePreprocessor(
             val speedAccepted = verticalSpeedMps == null ||
                 abs(verticalSpeedMps) <= parameters.maximumAbsoluteVerticalSpeedMps
             val finalReason = rejectionReason ?: if (!speedAccepted) "VERTICAL_SPEED" else null
+            val calibratedAltitudeM = referenceGnss.altitudeM + relativeAltitudeM
+            val rawResidualM = nearestGnss?.let { calibratedAltitudeM - it.altitudeM }
+            val biasRejectionReason = when {
+                nearestGnss == null -> "GNSS_UNAVAILABLE"
+                nearestGnss.verticalAccuracyM == null -> "VERTICAL_ACCURACY_UNAVAILABLE"
+                nearestGnss.verticalAccuracyM > parameters.maximumGnssVerticalAccuracyM ->
+                    "VERTICAL_ACCURACY"
+                finalReason != null -> "BAROMETER_INVALID"
+                nearestGnss.elapsedRealtimeNs == lastBiasGnssNs -> "GNSS_ALREADY_USED"
+                else -> null
+            }
+            val biasUpdateApplied = biasRejectionReason == null && rawResidualM != null
+            if (biasUpdateApplied) {
+                bias30.update(nearestGnss!!.elapsedRealtimeNs, rawResidualM!!)
+                bias60.update(nearestGnss.elapsedRealtimeNs, rawResidualM)
+                bias120.update(nearestGnss.elapsedRealtimeNs, rawResidualM)
+                lastBiasGnssNs = nearestGnss.elapsedRealtimeNs
+            }
             records += BarometricAltitudeRecord(
                 elapsedRealtimeNs = sample.elapsedRealtimeNs,
                 pressureHpa = pressureHpa,
                 filteredPressureHpa = filteredPressureHpa,
                 relativeAltitudeM = relativeAltitudeM,
-                calibratedAltitudeM = referenceGnss.altitudeM + relativeAltitudeM,
+                calibratedAltitudeM = calibratedAltitudeM,
                 verticalSpeedMps = verticalSpeedMps?.takeIf { speedAccepted },
                 referencePressureHpa = referencePressureHpa,
                 referenceGnssAltitudeM = referenceGnss.altitudeM,
                 gnssAltitudeM = nearestGnss?.altitudeM,
                 gnssVerticalAccuracyM = nearestGnss?.verticalAccuracyM,
+                rawAltitudeResidualM = rawResidualM,
+                barometerBias30sM = bias30.valueM,
+                barometerBias60sM = bias60.valueM,
+                barometerBias120sM = bias120.valueM,
+                correctedAltitude30sM = calibratedAltitudeM - bias30.valueM,
+                correctedAltitude60sM = calibratedAltitudeM - bias60.valueM,
+                correctedAltitude120sM = calibratedAltitudeM - bias120.valueM,
+                gnssBiasUpdateApplied = biasUpdateApplied,
+                gnssBiasRejectionReason = biasRejectionReason.orEmpty(),
                 valid = finalReason == null,
                 rejectionReason = finalReason.orEmpty()
             )
@@ -175,6 +206,22 @@ class BarometricAltitudePreprocessor(
         return if (size % 2 == 0) (this[middle - 1] + this[middle]) * 0.5 else this[middle]
     }
 
+    private class AltitudeBiasFilter(private val timeConstantSec: Double) {
+        var valueM: Double = 0.0
+            private set
+        private var previousElapsedRealtimeNs: Long? = null
+
+        fun update(elapsedRealtimeNs: Long, observedBiasM: Double) {
+            val previous = previousElapsedRealtimeNs
+            val alpha = if (previous == null) 1.0 else {
+                val dtSec = (elapsedRealtimeNs - previous) / NS_PER_SEC
+                (dtSec / (timeConstantSec + dtSec)).coerceIn(0.0, 1.0)
+            }
+            valueM += alpha * (observedBiasM - valueM)
+            previousElapsedRealtimeNs = elapsedRealtimeNs
+        }
+    }
+
     private data class AltitudePoint(val elapsedRealtimeNs: Long, val altitudeM: Double)
     private data class GnssAltitudePoint(
         val elapsedRealtimeNs: Long,
@@ -202,7 +249,8 @@ data class BarometricAltitudeParameters(
     val maximumPressureJumpHpa: Double,
     val maximumIntervalSec: Double,
     val maximumAbsoluteVerticalSpeedMps: Double,
-    val maximumGnssAgeNs: Long
+    val maximumGnssAgeNs: Long,
+    val maximumGnssVerticalAccuracyM: Double
 ) {
     companion object {
         val DEFAULT = BarometricAltitudeParameters(
@@ -216,7 +264,8 @@ data class BarometricAltitudeParameters(
             maximumPressureJumpHpa = 0.5,
             maximumIntervalSec = 1.0,
             maximumAbsoluteVerticalSpeedMps = 15.0,
-            maximumGnssAgeNs = 1_500_000_000L
+            maximumGnssAgeNs = 1_500_000_000L,
+            maximumGnssVerticalAccuracyM = 15.0
         )
     }
 }
@@ -232,6 +281,15 @@ data class BarometricAltitudeRecord(
     val referenceGnssAltitudeM: Double,
     val gnssAltitudeM: Double?,
     val gnssVerticalAccuracyM: Double?,
+    val rawAltitudeResidualM: Double?,
+    val barometerBias30sM: Double,
+    val barometerBias60sM: Double,
+    val barometerBias120sM: Double,
+    val correctedAltitude30sM: Double,
+    val correctedAltitude60sM: Double,
+    val correctedAltitude120sM: Double,
+    val gnssBiasUpdateApplied: Boolean,
+    val gnssBiasRejectionReason: String,
     val valid: Boolean,
     val rejectionReason: String
 )
