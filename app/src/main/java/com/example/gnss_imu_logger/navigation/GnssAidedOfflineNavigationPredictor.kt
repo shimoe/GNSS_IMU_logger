@@ -22,18 +22,26 @@ class GnssAidedOfflineNavigationPredictor(
         NavigationGravityParameters.DEFAULT,
     private val eskfNoiseParameters: NavigationEskfNoiseParameters =
         NavigationEskfNoiseParameters.DEFAULT,
-    private val outputIntervalNs: Long = DEFAULT_OUTPUT_INTERVAL_NS
+    private val outputIntervalNs: Long = DEFAULT_OUTPUT_INTERVAL_NS,
+    private val attitudePredictionSink: NavigationAttitudePredictionSink =
+        NavigationAttitudePredictionSink.NONE,
+    private val attitudeDiagnosticIntervalNs: Long = DEFAULT_ATTITUDE_DIAGNOSTIC_INTERVAL_NS
 ) {
+    init {
+        require(attitudeDiagnosticIntervalNs > 0L) {
+            "姿勢診断の出力周期は1 ns以上にしてください。"
+        }
+    }
     fun run(input: PreparedNavigationInput): GnssAidedNavigationResult {
         require(input.events.isNotEmpty()) { "推定入力イベントがありません。" }
-        val initialAttitude = createInitialAttitude(input)
+        val initialization = NavigationInitializer().initialize(input)
         var state = NavigationState(
-            elapsedRealtimeNs = input.initialElapsedRealtimeNs,
-            positionEnuM = input.initialPositionEnuM,
-            velocityEnuMps = input.initialVelocityEnuMps,
-            attitudeBodyToEnu = initialAttitude,
+            elapsedRealtimeNs = initialization.endElapsedRealtimeNs,
+            positionEnuM = initialization.initialPositionEnuM,
+            velocityEnuMps = initialization.initialVelocityEnuMps,
+            attitudeBodyToEnu = initialization.attitudeBodyToEnu,
             accelerometerBiasMps2 = ZERO_VECTOR,
-            gyroscopeBiasRadps = ZERO_VECTOR,
+            gyroscopeBiasRadps = initialization.initialGyroscopeBiasBodyRadps,
             accelerationEnuMps2 = ZERO_VECTOR,
             status = NavigationPredictionStatus.WAITING_FOR_IMU
         )
@@ -41,7 +49,7 @@ class GnssAidedOfflineNavigationPredictor(
         var eskfCovariance = NavigationEskfCovariance.initial(eskfNoiseParameters)
         var accelerationBodyMps2: BodyVector? = null
         var angularRateBodyRadps: BodyVector? = null
-        var nextOutputNs = input.initialElapsedRealtimeNs
+        var nextOutputNs = initialization.endElapsedRealtimeNs
         val updater = NavigationMeasurementUpdater(measurementParameters)
         val headingUpdater = NavigationHeadingUpdater(headingParameters)
         val gravityUpdater = NavigationGravityUpdater(gravityParameters)
@@ -50,7 +58,9 @@ class GnssAidedOfflineNavigationPredictor(
         val residuals = mutableListOf<NavigationGnssResidual>()
         val updates = mutableListOf<NavigationMeasurementUpdateRecord>()
         val gravityUpdates = mutableListOf<NavigationGravityUpdateRecord>()
-        val attitudePredictions = mutableListOf<NavigationAttitudePredictionRecord>()
+        var attitudePredictionCount = 0L
+        var nextAttitudeDiagnosticNs = initialization.endElapsedRealtimeNs
+        var previousAbnormalReason = ""
         val headingDirections = mutableListOf<NavigationHeadingDirectionRecord>()
         val headingDirectionTracker = NavigationHeadingDirectionTracker()
         var previousGravityUpdateNs: Long? = null
@@ -59,7 +69,7 @@ class GnssAidedOfflineNavigationPredictor(
         var previousGnssUpdate: NavigationGnssUpdate? = null
 
         input.events.asSequence()
-            .filter { it.elapsedRealtimeNs >= input.initialElapsedRealtimeNs }
+            .filter { it.elapsedRealtimeNs >= initialization.endElapsedRealtimeNs }
             .forEach { event ->
                 val dtNs = event.elapsedRealtimeNs - state.elapsedRealtimeNs
                 if (dtNs > 0L && dtNs <= MAXIMUM_INTEGRATION_INTERVAL_NS) {
@@ -86,35 +96,51 @@ class GnssAidedOfflineNavigationPredictor(
                     )
                     val attitudeAfter = state.attitudeBodyToEnu
                     val eulerAfter = attitudeAfter.toEulerAngles()
-                    attitudePredictions += NavigationAttitudePredictionRecord(
-                        elapsedRealtimeNs = event.elapsedRealtimeNs,
-                        source = when (event) {
-                            is PreparedNavigationEvent.Imu -> "IMU"
-                            is PreparedNavigationEvent.Gnss -> "GNSS"
-                        },
-                        dtSec = dtSec,
-                        angularRateForwardRadps = correctedAngularRate.x,
-                        angularRateLeftRadps = correctedAngularRate.y,
-                        angularRateUpRadps = correctedAngularRate.z,
-                        accelerationBodyForwardMps2 = correctedAcceleration.x,
-                        accelerationBodyLeftMps2 = correctedAcceleration.y,
-                        accelerationBodyUpMps2 = correctedAcceleration.z,
-                        accelerationEnuEastMps2 = state.accelerationEnuMps2.x,
-                        accelerationEnuNorthMps2 = state.accelerationEnuMps2.y,
-                        accelerationEnuUpMps2 = state.accelerationEnuMps2.z,
-                        velocityEastMps = state.velocityEnuMps.eastMps,
-                        velocityNorthMps = state.velocityEnuMps.northMps,
-                        velocityUpMps = state.velocityEnuMps.upMps,
-                        rollAfterRad = eulerAfter.rollRad,
-                        pitchAfterRad = eulerAfter.pitchRad,
-                        yawAfterRad = eulerAfter.yawRad,
-                        abnormalReason = predictionAbnormalReason(state),
-                        quaternionBefore = attitudeBefore,
-                        quaternionAfter = attitudeAfter,
-                        rollDeltaRad = wrapHeadingAngle(eulerAfter.rollRad - eulerBefore.rollRad),
-                        pitchDeltaRad = wrapHeadingAngle(eulerAfter.pitchRad - eulerBefore.pitchRad),
-                        yawDeltaRad = wrapHeadingAngle(eulerAfter.yawRad - eulerBefore.yawRad)
-                    )
+                    val abnormalReason = predictionAbnormalReason(state)
+                    val source = when (event) {
+                        is PreparedNavigationEvent.Imu -> "IMU"
+                        is PreparedNavigationEvent.Gnss -> "GNSS"
+                    }
+                    val abnormalChanged = abnormalReason != previousAbnormalReason
+                    val shouldWriteAttitudeDiagnostic =
+                        event.elapsedRealtimeNs >= nextAttitudeDiagnosticNs ||
+                            abnormalChanged || source == "GNSS"
+                    if (shouldWriteAttitudeDiagnostic) {
+                        attitudePredictionSink.write(
+                            NavigationAttitudePredictionRecord(
+                                elapsedRealtimeNs = event.elapsedRealtimeNs,
+                                source = source,
+                                dtSec = dtSec,
+                                angularRateForwardRadps = correctedAngularRate.x,
+                                angularRateLeftRadps = correctedAngularRate.y,
+                                angularRateUpRadps = correctedAngularRate.z,
+                                accelerationBodyForwardMps2 = correctedAcceleration.x,
+                                accelerationBodyLeftMps2 = correctedAcceleration.y,
+                                accelerationBodyUpMps2 = correctedAcceleration.z,
+                                accelerationEnuEastMps2 = state.accelerationEnuMps2.x,
+                                accelerationEnuNorthMps2 = state.accelerationEnuMps2.y,
+                                accelerationEnuUpMps2 = state.accelerationEnuMps2.z,
+                                velocityEastMps = state.velocityEnuMps.eastMps,
+                                velocityNorthMps = state.velocityEnuMps.northMps,
+                                velocityUpMps = state.velocityEnuMps.upMps,
+                                rollAfterRad = eulerAfter.rollRad,
+                                pitchAfterRad = eulerAfter.pitchRad,
+                                yawAfterRad = eulerAfter.yawRad,
+                                abnormalReason = abnormalReason,
+                                quaternionBefore = attitudeBefore,
+                                quaternionAfter = attitudeAfter,
+                                rollDeltaRad = wrapHeadingAngle(eulerAfter.rollRad - eulerBefore.rollRad),
+                                pitchDeltaRad = wrapHeadingAngle(eulerAfter.pitchRad - eulerBefore.pitchRad),
+                                yawDeltaRad = wrapHeadingAngle(eulerAfter.yawRad - eulerBefore.yawRad)
+                            )
+                        )
+                        attitudePredictionCount++
+                        if (event.elapsedRealtimeNs >= nextAttitudeDiagnosticNs) {
+                            nextAttitudeDiagnosticNs =
+                                event.elapsedRealtimeNs + attitudeDiagnosticIntervalNs
+                        }
+                    }
+                    previousAbnormalReason = abnormalReason
                     variance = variance.predict(dtSec, measurementParameters)
                     headingVarianceRad2 = headingUpdater.predictVariance(
                         headingVarianceRad2,
@@ -368,10 +394,11 @@ class GnssAidedOfflineNavigationPredictor(
                 }
             }
         return GnssAidedNavigationResult(
+            initialization = initialization.diagnostics,
             prediction = OfflineNavigationPredictionResult(samples, residuals),
             measurementUpdates = updates,
             gravityUpdates = gravityUpdates,
-            attitudePredictions = attitudePredictions,
+            attitudePredictionCount = attitudePredictionCount,
             headingDirections = headingDirections
         )
     }
@@ -480,33 +507,6 @@ class GnssAidedOfflineNavigationPredictor(
         )
     }
 
-    private fun createInitialAttitude(input: PreparedNavigationInput): AttitudeQuaternion {
-        val acceleration = input.events.asSequence()
-            .takeWhile { it.elapsedRealtimeNs <= input.initialElapsedRealtimeNs }
-            .filterIsInstance<PreparedNavigationEvent.Imu>()
-            .mapNotNull { it.sample.accelerationBodyMps2 }
-            .lastOrNull()
-        val horizontalSpeedMps = sqrt(
-            input.initialVelocityEnuMps.eastMps * input.initialVelocityEnuMps.eastMps +
-                input.initialVelocityEnuMps.northMps * input.initialVelocityEnuMps.northMps
-        )
-        val yawRad = if (horizontalSpeedMps >= MINIMUM_INITIAL_YAW_SPEED_MPS) {
-            atan2(
-                input.initialVelocityEnuMps.eastMps,
-                input.initialVelocityEnuMps.northMps
-            )
-        } else 0.0
-        if (acceleration == null) {
-            return AttitudeQuaternion.fromEulerAngles(0.0, 0.0, yawRad)
-        }
-        val rollRad = atan2(acceleration.y, acceleration.z)
-        val pitchRad = atan2(
-            -acceleration.x,
-            sqrt(acceleration.y * acceleration.y + acceleration.z * acceleration.z)
-        )
-        return AttitudeQuaternion.fromEulerAngles(rollRad, pitchRad, yawRad)
-    }
-
     /**
      * GNSS観測直前の推定誤差と不確かさの整合性を記録する。
      * 入力: 推定状態、位置・速度の軸別分散、GNSS観測
@@ -582,6 +582,7 @@ class GnssAidedOfflineNavigationPredictor(
     companion object {
         private const val NS_PER_SEC = 1_000_000_000.0
         private const val DEFAULT_OUTPUT_INTERVAL_NS = 10_000_000L
+        private const val DEFAULT_ATTITUDE_DIAGNOSTIC_INTERVAL_NS = 10_000_000L
         private const val MAXIMUM_INTEGRATION_INTERVAL_NS = 100_000_000L
         private const val MINIMUM_INITIAL_YAW_SPEED_MPS = 2.0
         private const val ABNORMAL_ACCELERATION_NORM_MPS2 = 20.0
@@ -595,10 +596,11 @@ class GnssAidedOfflineNavigationPredictor(
 }
 
 data class GnssAidedNavigationResult(
+    val initialization: NavigationInitializationDiagnostics,
     val prediction: OfflineNavigationPredictionResult,
     val measurementUpdates: List<NavigationMeasurementUpdateRecord>,
     val gravityUpdates: List<NavigationGravityUpdateRecord>,
-    val attitudePredictions: List<NavigationAttitudePredictionRecord>,
+    val attitudePredictionCount: Long,
     val headingDirections: List<NavigationHeadingDirectionRecord>
 )
 

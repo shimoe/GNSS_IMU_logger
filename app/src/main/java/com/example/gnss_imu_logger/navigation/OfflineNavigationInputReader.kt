@@ -23,9 +23,12 @@ class OfflineNavigationInputReader(
         require(sessionDirectory.isDirectory) {
             "セッションディレクトリが存在しません: ${sessionDirectory.path}"
         }
-        val deviceMount = readDeviceMount(requiredFile("session.json"))
+        val sessionFile = requiredFile("session.json")
+        val sessionJson = readSessionJson(sessionFile)
+        val deviceMount = readDeviceMount(sessionJson)
+        val calibration = readSessionCalibration(sessionJson)
         val accelerometerFile = requiredFile("accel.bin")
-        val gyroscopeFile = preferredFile("gyro_corrected.bin", "gyro.bin")
+        val angularRateInput = selectAngularRateInput()
         val observations = readGnssCsv(requiredFile("gnss.csv"))
         require(observations.isNotEmpty()) { "gnss.csvに有効な位置観測がありません。" }
         val originObservation = observations.firstOrNull { gate.evaluate(it).accepted }
@@ -33,7 +36,9 @@ class OfflineNavigationInputReader(
         return OfflineNavigationInput(
             origin = originObservation.position,
             deviceMount = deviceMount,
-            events = mergeEvents(accelerometerFile, gyroscopeFile, observations)
+            calibration = calibration,
+            angularRateSource = angularRateInput.source,
+            events = mergeEvents(accelerometerFile, angularRateInput.file, observations)
         )
     }
 
@@ -42,9 +47,17 @@ class OfflineNavigationInputReader(
      * 入力: session.json
      * 出力: セッションで使用したDeviceMount
      */
-    private fun readDeviceMount(file: File): DeviceMount {
-        val json = runCatching { JSONObject(file.readText(Charsets.UTF_8)) }
+    /** session.jsonをJSONとして読み込む。 */
+    private fun readSessionJson(file: File): JSONObject =
+        runCatching { JSONObject(file.readText(Charsets.UTF_8)) }
             .getOrElse { error("session.jsonを読み込めません: ${it.message}") }
+
+    /**
+     * 計測時に保存された端末取付方向を読み込む。
+     * 入力: session.jsonのJSON
+     * 出力: セッションで使用したDeviceMount
+     */
+    private fun readDeviceMount(json: JSONObject): DeviceMount {
         val formatVersion = json.optInt("format_version", -1)
         require(formatVersion >= DEVICE_MOUNT_FORMAT_VERSION) {
             "端末取付方向を確認できないセッション形式です: format_version=$formatVersion"
@@ -53,6 +66,49 @@ class OfflineNavigationInputReader(
         return DeviceMount.fromStoredName(storedName)
             ?: error("session.jsonの端末取付方向が不正です: device_mount=$storedName")
     }
+
+    /**
+     * 計測時の初期校正結果を読み込む。
+     * 入力: session.jsonのJSON
+     * 出力: 校正結果。旧形式などで存在しない場合はnull
+     */
+    private fun readSessionCalibration(json: JSONObject): SessionCalibration? {
+        val calibration = json.optJSONObject("statistics")
+            ?.optJSONObject("calibration") ?: return null
+        val gravity = calibration.optJSONObject("gravity_mps2") ?: return null
+        val gravityStd = calibration.optJSONObject("gravity_std_mps2") ?: return null
+        val gyroscopeBias = calibration.optJSONObject("gyroscope_bias_radps") ?: return null
+        val gyroscopeStd = calibration.optJSONObject("gyroscope_std_radps") ?: return null
+        return SessionCalibration(
+            startedElapsedRealtimeNs = calibration.optLong("started_elapsed_ns", -1L),
+            completedElapsedRealtimeNs = calibration.optLong("completed_elapsed_ns", -1L),
+            accelerationSampleCount = calibration.optInt("accelerometer_samples", 0),
+            angularRateSampleCount = calibration.optInt("gyroscope_samples", 0),
+            gravityDeviceMps2 = gravity.toBodyVector(),
+            gravityStdDeviceMps2 = gravityStd.toBodyVector(),
+            gyroscopeBiasDeviceRadps = gyroscopeBias.toBodyVector(),
+            gyroscopeStdDeviceRadps = gyroscopeStd.toBodyVector()
+        )
+    }
+
+    /** 補正済み角速度を優先し、入力元を明示する。 */
+    private fun selectAngularRateInput(): AngularRateInput {
+        val corrected = sessionDirectory.resolve("gyro_corrected.bin")
+        if (corrected.isFile && corrected.length() > BINARY_SENSOR_HEADER_BYTES) {
+            return AngularRateInput(corrected, AngularRateSource.CORRECTED)
+        }
+        return AngularRateInput(
+            requiredFile("gyro.bin"),
+            AngularRateSource.RAW_WITH_RECORDED_BIAS
+        )
+    }
+
+    private fun JSONObject.toBodyVector() =
+        com.example.gnss_imu_logger.attitude.BodyVector(
+            x = optDouble("x", Double.NaN),
+            y = optDouble("y", Double.NaN),
+            z = optDouble("z", Double.NaN)
+        )
 
     private fun mergeEvents(
         accelerometerFile: File,
@@ -116,11 +172,6 @@ class OfflineNavigationInputReader(
         require(it.isFile) { "必要なログファイルがありません: $name" }
     }
 
-    private fun preferredFile(preferred: String, fallback: String): File {
-        val preferredFile = sessionDirectory.resolve(preferred)
-        return if (preferredFile.isFile) preferredFile else requiredFile(fallback)
-    }
-
     private fun parseCsvLine(line: String): List<String> {
         val values = mutableListOf<String>()
         val value = StringBuilder()
@@ -163,7 +214,13 @@ class OfflineNavigationInputReader(
 
     companion object {
         private const val DEVICE_MOUNT_FORMAT_VERSION = 2
+        private const val BINARY_SENSOR_HEADER_BYTES = 16L
     }
+
+    private data class AngularRateInput(
+        val file: File,
+        val source: AngularRateSource
+    )
 
     private class EventSource private constructor(
         val priority: Int,
@@ -209,8 +266,26 @@ class OfflineNavigationInputReader(
 data class OfflineNavigationInput(
     val origin: GeodeticPosition,
     val deviceMount: DeviceMount,
+    val calibration: SessionCalibration?,
+    val angularRateSource: AngularRateSource,
     val events: Sequence<OfflineNavigationEvent>
 )
+
+data class SessionCalibration(
+    val startedElapsedRealtimeNs: Long,
+    val completedElapsedRealtimeNs: Long,
+    val accelerationSampleCount: Int,
+    val angularRateSampleCount: Int,
+    val gravityDeviceMps2: com.example.gnss_imu_logger.attitude.BodyVector,
+    val gravityStdDeviceMps2: com.example.gnss_imu_logger.attitude.BodyVector,
+    val gyroscopeBiasDeviceRadps: com.example.gnss_imu_logger.attitude.BodyVector,
+    val gyroscopeStdDeviceRadps: com.example.gnss_imu_logger.attitude.BodyVector
+)
+
+enum class AngularRateSource {
+    CORRECTED,
+    RAW_WITH_RECORDED_BIAS
+}
 
 sealed interface OfflineNavigationEvent {
     val elapsedRealtimeNs: Long

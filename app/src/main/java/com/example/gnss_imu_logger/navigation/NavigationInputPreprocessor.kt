@@ -63,17 +63,27 @@ class NavigationInputPreprocessor(
                         { diagnostics.angularRateGapCount++ }
                     )
                     val sample = event.sample
+                    val angularRateDevice = if (
+                        input.angularRateSource == AngularRateSource.CORRECTED
+                    ) {
+                        floatArrayOf(
+                            sample.correctedX.toFloat(),
+                            sample.correctedY.toFloat(),
+                            sample.correctedZ.toFloat()
+                        )
+                    } else {
+                        // 未補正ジャイロは保存値をそのまま渡し、推定状態の校正バイアスを1回だけ差し引く。
+                        floatArrayOf(
+                            sample.x.toFloat(),
+                            sample.y.toFloat(),
+                            sample.z.toFloat()
+                        )
+                    }
                     PreparedNavigationEvent.Imu(
                         NavigationImuSample(
                             elapsedRealtimeNs = sample.elapsedRealtimeNs,
                             accelerationBodyMps2 = null,
-                            angularRateBodyRadps = mountTransform.deviceToBody(
-                                floatArrayOf(
-                                    sample.correctedX.toFloat(),
-                                    sample.correctedY.toFloat(),
-                                    sample.correctedZ.toFloat()
-                                )
-                            ),
+                            angularRateBodyRadps = mountTransform.deviceToBody(angularRateDevice),
                             sensorAccuracy = sample.accuracy
                         )
                     )
@@ -113,6 +123,8 @@ class NavigationInputPreprocessor(
         return PreparedNavigationInput(
             origin = input.origin,
             deviceMount = input.deviceMount,
+            calibration = input.calibration,
+            angularRateSource = input.angularRateSource,
             initialElapsedRealtimeNs = initialGnss.elapsedRealtimeNs,
             initialPositionEnuM = initialGnss.positionEnuM,
             initialVelocityEnuMps = initialGnss.velocityEnuMps ?: EnuVelocity.ZERO,
@@ -252,6 +264,8 @@ sealed interface PreparedNavigationEvent {
 data class PreparedNavigationInput(
     val origin: GeodeticPosition,
     val deviceMount: DeviceMount,
+    val calibration: SessionCalibration?,
+    val angularRateSource: AngularRateSource,
     val initialElapsedRealtimeNs: Long,
     val initialPositionEnuM: EnuPosition,
     val initialVelocityEnuMps: EnuVelocity,
