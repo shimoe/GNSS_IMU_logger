@@ -60,6 +60,7 @@ class GnssAidedOfflineNavigationPredictor(
         val residuals = mutableListOf<NavigationGnssResidual>()
         val updates = mutableListOf<NavigationMeasurementUpdateRecord>()
         val gravityUpdates = mutableListOf<NavigationGravityUpdateRecord>()
+        var cumulativeGravityPitchCorrectionRad = 0.0
         var attitudePredictionCount = 0L
         var nextAttitudeDiagnosticNs = initialization.endElapsedRealtimeNs
         var previousAbnormalReason = ""
@@ -185,6 +186,9 @@ class GnssAidedOfflineNavigationPredictor(
                                 attitudeBodyToEnu = gravityResult.attitudeBodyToEnu
                             )
                             val gravityEulerAfter = gravityResult.attitudeBodyToEnu.toEulerAngles()
+                            cumulativeGravityPitchCorrectionRad += wrapHeadingAngle(
+                                gravityEulerAfter.pitchRad - gravityEulerBefore.pitchRad
+                            )
                             gravityUpdates += NavigationGravityUpdateRecord(
                                 elapsedRealtimeNs = event.elapsedRealtimeNs,
                                 available = gravityResult.available,
@@ -207,7 +211,18 @@ class GnssAidedOfflineNavigationPredictor(
                                 ),
                                 yawDeltaRad = wrapHeadingAngle(
                                     gravityEulerAfter.yawRad - gravityEulerBefore.yawRad
-                                )
+                                ),
+                                vehicleGradeBeforeRad = gravityResult.vehicleGradeBeforeRad,
+                                vehicleGradeAfterRad = gravityResult.vehicleGradeAfterRad,
+                                gravityResidualBeforeRad = gravityResult.gravityResidualBeforeRad,
+                                gravityResidualAfterRad = gravityResult.gravityResidualAfterRad,
+                                residualReductionRad = gravityResult.residualReductionRad,
+                                correctionImprovedResidual = gravityResult.correctionImprovedResidual,
+                                currentDirectionResidualAfterRad = gravityResult.currentDirectionResidualAfterRad,
+                                oppositeDirectionResidualAfterRad = gravityResult.oppositeDirectionResidualAfterRad,
+                                preferredCorrectionDirection = gravityResult.preferredCorrectionDirection,
+                                cumulativePitchCorrectionRad = cumulativeGravityPitchCorrectionRad,
+                                rejectionReason = gravityResult.rejectionReason
                             )
                             previousGravityUpdateNs = event.elapsedRealtimeNs
                         }
@@ -731,7 +746,18 @@ data class NavigationGravityUpdateRecord(
     val yawAfterRad: Double,
     val rollDeltaRad: Double,
     val pitchDeltaRad: Double,
-    val yawDeltaRad: Double
+    val yawDeltaRad: Double,
+    val vehicleGradeBeforeRad: Double,
+    val vehicleGradeAfterRad: Double,
+    val gravityResidualBeforeRad: Double?,
+    val gravityResidualAfterRad: Double?,
+    val residualReductionRad: Double?,
+    val correctionImprovedResidual: Boolean?,
+    val currentDirectionResidualAfterRad: Double?,
+    val oppositeDirectionResidualAfterRad: Double?,
+    val preferredCorrectionDirection: NavigationGravityCorrectionDirection,
+    val cumulativePitchCorrectionRad: Double,
+    val rejectionReason: NavigationGravityRejectionReason
 )
 
 data class NavigationMeasurementUpdateRecord(
