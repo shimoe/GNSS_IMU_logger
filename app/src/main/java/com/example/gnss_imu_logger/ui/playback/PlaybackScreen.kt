@@ -23,11 +23,16 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.gnss_imu_logger.navigation.OfflineNavigationProcessor
+import com.example.gnss_imu_logger.navigation.LapConfigReader
+import com.example.gnss_imu_logger.navigation.LapConfigWriter
+import com.example.gnss_imu_logger.navigation.LapDetectionConfig
+import com.example.gnss_imu_logger.navigation.LapCrossingDirection
 import com.example.gnss_imu_logger.playback.PlaybackController
 import com.example.gnss_imu_logger.playback.PlaybackSession
 import com.example.gnss_imu_logger.playback.PlaybackState
@@ -41,6 +46,7 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 
 @Composable
 fun PlaybackScreen(
@@ -157,12 +163,24 @@ private fun PlaybackDetailScreen(
     var navigationPlayback by remember(item.sessionId) {
         mutableStateOf<NavigationPlaybackResult?>(null)
     }
+    val coroutineScope = rememberCoroutineScope()
+    var lapConfig by remember(item.sessionId) { mutableStateOf<LapDetectionConfig?>(null) }
+    var lapDraft by remember(item.sessionId) { mutableStateOf(LapLineDraft()) }
+    var lapEditState by remember(item.sessionId) { mutableStateOf(LapLineEditState.IDLE) }
+    var lapBusy by remember(item.sessionId) { mutableStateOf(false) }
+    var lapMessage by remember(item.sessionId) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(item.sessionId) {
         loading = true
         errorMessage = null
         navigationMessage = "オフラインナビゲーション解析中"
         navigationWarning = null
+        lapConfig = withContext(Dispatchers.IO) {
+            runCatching { LapConfigReader().readOrNull(item.directory) }.getOrNull()
+        }
+        lapDraft = lapConfig?.let {
+            LapLineDraft(it.lineStart, it.lineEnd, it.allowedDirection)
+        } ?: LapLineDraft()
         val navigationResult = runCatching {
             withContext(Dispatchers.IO) {
                 OfflineNavigationProcessor().process(item.directory)
@@ -171,7 +189,7 @@ private fun PlaybackDetailScreen(
         navigationResult.onSuccess { result ->
             navigationMessage =
                 "オフライン解析完了: 予測${result.predictionSampleCount}件、" +
-                    "GNSS残差${result.gnssResidualCount}件"
+                    "GNSS残差${result.gnssResidualCount}件、ラップ${result.lapRecordCount}件"
             navigationPlayback = runCatching {
                 withContext(Dispatchers.IO) {
                     NavigationPlaybackReader().read(item.directory)
@@ -224,6 +242,66 @@ private fun PlaybackDetailScreen(
             Text(it, color = MaterialTheme.colorScheme.error)
         }
 
+        LapLineEditor(
+            state = lapEditState,
+            draft = lapDraft,
+            saved = lapConfig,
+            busy = lapBusy,
+            message = lapMessage,
+            onStart = {
+                lapDraft = LapLineDraft(direction = lapConfig?.allowedDirection
+                    ?: LapCrossingDirection.LEFT_TO_RIGHT)
+                lapEditState = LapLineEditState.WAITING_FOR_START_POINT
+                lapMessage = "地図操作を有効にして始点を選択してください。"
+            },
+            onSwapDirection = {
+                lapDraft = lapDraft.copy(
+                    direction = if (lapDraft.direction == LapCrossingDirection.LEFT_TO_RIGHT)
+                        LapCrossingDirection.RIGHT_TO_LEFT
+                    else LapCrossingDirection.LEFT_TO_RIGHT
+                )
+            },
+            onCancel = {
+                lapDraft = lapConfig?.let {
+                    LapLineDraft(it.lineStart, it.lineEnd, it.allowedDirection)
+                } ?: LapLineDraft()
+                lapEditState = LapLineEditState.IDLE
+                lapMessage = null
+            },
+            onSave = {
+                val config = lapDraft.toConfig()
+                if (config == null) {
+                    lapMessage = "始点と終点を設定してください。"
+                } else coroutineScope.launch {
+                    lapBusy = true
+                    runCatching {
+                        withContext(Dispatchers.IO) {
+                            LapConfigWriter().write(item.directory, config)
+                            OfflineNavigationProcessor().process(item.directory)
+                        }
+                    }.onSuccess { result ->
+                        lapConfig = config
+                        lapEditState = LapLineEditState.IDLE
+                        lapMessage = "保存とラップ解析が完了しました: ${result.lapRecordCount}件"
+                    }.onFailure { lapMessage = "保存または解析に失敗しました: ${it.message}" }
+                    lapBusy = false
+                }
+            },
+            onDelete = {
+                coroutineScope.launch {
+                    lapBusy = true
+                    runCatching { withContext(Dispatchers.IO) {
+                        LapConfigWriter().delete(item.directory)
+                    } }.onSuccess {
+                        lapConfig = null
+                        lapDraft = LapLineDraft()
+                        lapMessage = "スタートライン設定とラップ結果を削除しました。"
+                    }.onFailure { lapMessage = "削除に失敗しました: ${it.message}" }
+                    lapBusy = false
+                }
+            }
+        )
+
         when {
             loading -> CircularProgressIndicator()
             errorMessage != null -> Text(
@@ -234,6 +312,22 @@ private fun PlaybackDetailScreen(
                 state = requireNotNull(state),
                 session = requireNotNull(playbackSession),
                 navigation = navigationPlayback,
+                lapConfig = lapConfig,
+                lapDraft = if (lapEditState == LapLineEditState.IDLE) null else lapDraft,
+                lapEditing = lapEditState != LapLineEditState.IDLE,
+                onLapMapClick = { point ->
+                    when (lapEditState) {
+                        LapLineEditState.WAITING_FOR_START_POINT -> {
+                            lapDraft = lapDraft.copy(start = point)
+                            lapEditState = LapLineEditState.WAITING_FOR_END_POINT
+                        }
+                        LapLineEditState.WAITING_FOR_END_POINT -> {
+                            lapDraft = lapDraft.copy(end = point)
+                            lapEditState = LapLineEditState.READY_TO_SAVE
+                        }
+                        else -> Unit
+                    }
+                },
                 onPlayPause = {
                     val playbackController = controller ?: return@PlaybackControls
                     if (playbackController.state.playing) {

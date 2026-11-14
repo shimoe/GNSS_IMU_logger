@@ -25,12 +25,18 @@ import com.example.gnss_imu_logger.playback.PlaybackState
 import com.example.gnss_imu_logger.playback.PlaybackTrack
 import com.example.gnss_imu_logger.playback.PlaybackTrackView
 import com.example.gnss_imu_logger.playback.NavigationPlaybackResult
+import com.example.gnss_imu_logger.navigation.LapDetectionConfig
+import com.example.gnss_imu_logger.navigation.GeodeticPosition
 
 @Composable
 internal fun PlaybackControls(
     state: PlaybackState,
     session: PlaybackSession,
     navigation: NavigationPlaybackResult?,
+    lapConfig: LapDetectionConfig?,
+    lapDraft: LapLineDraft?,
+    lapEditing: Boolean,
+    onLapMapClick: (GeodeticPosition) -> Unit,
     onPlayPause: () -> Unit,
     onRestart: () -> Unit,
     onSeek: (Long) -> Unit,
@@ -56,6 +62,10 @@ internal fun PlaybackControls(
                 bounds = track.bounds,
                 navigation = navigation,
                 currentElapsedRealtimeNs = session.startElapsedNs + state.positionMs * 1_000_000L,
+                lapConfig = lapConfig,
+                lapDraft = lapDraft,
+                lapEditing = lapEditing,
+                onLapMapClick = onLapMapClick,
                 onStatusChanged = { status ->
                     onlineMapStatus = status
                 },

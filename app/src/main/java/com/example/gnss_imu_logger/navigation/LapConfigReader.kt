@@ -6,7 +6,10 @@ import java.io.File
 /** lap_config.jsonから方向付きスタートライン設定を読み込む。 */
 class LapConfigReader {
     fun readOrNull(sessionDirectory: File): LapDetectionConfig? {
-        val file = sessionDirectory.resolve(FILE_NAME)
+        return readOrNullFromFile(sessionDirectory.resolve(FILE_NAME))
+    }
+
+    fun readOrNullFromFile(file: File): LapDetectionConfig? {
         if (!file.isFile) return null
         val json = JSONObject(file.readText(Charsets.UTF_8))
         require(json.optInt("schema_version", 1) == 1) {

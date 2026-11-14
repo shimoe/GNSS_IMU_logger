@@ -37,6 +37,8 @@ import com.example.gnss_imu_logger.playback.PlaybackLocation
 import com.example.gnss_imu_logger.playback.TrackBounds
 import com.example.gnss_imu_logger.playback.NavigationPlaybackResult
 import com.example.gnss_imu_logger.playback.NavigationPlaybackPoint
+import com.example.gnss_imu_logger.navigation.GeodeticPosition
+import com.example.gnss_imu_logger.navigation.LapDetectionConfig
 import kotlinx.coroutines.delay
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -87,6 +89,10 @@ internal fun OnlinePlaybackMap(
     bounds: TrackBounds?,
     navigation: NavigationPlaybackResult?,
     currentElapsedRealtimeNs: Long,
+    lapConfig: LapDetectionConfig?,
+    lapDraft: LapLineDraft?,
+    lapEditing: Boolean,
+    onLapMapClick: (GeodeticPosition) -> Unit,
     onStatusChanged: (OnlineMapStatus) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -122,7 +128,9 @@ internal fun OnlinePlaybackMap(
 
     LaunchedEffect(status) { onStatusChanged(status) }
 
-    DisposableEffect(mapView, lifecycleOwner, trackData, navigationFeatures) {
+    DisposableEffect(
+        mapView, lifecycleOwner, trackData, navigationFeatures, lapConfig, lapDraft, lapEditing
+    ) {
         mapView.onCreate(Bundle())
         val observer = object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) = mapView.onStart()
@@ -133,6 +141,12 @@ internal fun OnlinePlaybackMap(
         lifecycleOwner.lifecycle.addObserver(observer)
         mapView.getMapAsync { readyMap ->
             map = readyMap
+            readyMap.addOnMapClickListener { point ->
+                if (lapEditing) {
+                    onLapMapClick(GeodeticPosition(point.latitude, point.longitude, 0.0))
+                    true
+                } else false
+            }
             readyMap.uiSettings.apply {
                 isCompassEnabled = false
                 isLogoEnabled = false
@@ -153,6 +167,7 @@ internal fun OnlinePlaybackMap(
                 )
                 addCurrentPositionLayers(readyStyle)
                 addNavigationLayers(readyStyle, navigationFeatures)
+                addLapLineLayers(readyStyle, lapConfig, lapDraft)
                 style = readyStyle
                 updateCurrentPosition(readyStyle, currentLocation)
                 updateNavigationCurrentPosition(
@@ -291,6 +306,44 @@ internal fun OnlinePlaybackMap(
         }
     }
 }
+
+/** 保存済みまたは編集中のスタートラインを表示する。 */
+private fun addLapLineLayers(
+    style: Style,
+    config: LapDetectionConfig?,
+    draft: LapLineDraft?
+) {
+    val start = draft?.start ?: config?.lineStart
+    val end = draft?.end ?: config?.lineEnd
+    val points = listOfNotNull(start?.toLapPoint(), end?.toLapPoint())
+    val lineFeatures = if (points.size == 2) {
+        listOf(Feature.fromGeometry(LineString.fromLngLats(points)))
+    } else emptyList()
+    style.addSource(
+        GeoJsonSource(LAP_LINE_SOURCE_ID, FeatureCollection.fromFeatures(lineFeatures))
+    )
+    style.addLayer(
+        LineLayer(LAP_LINE_LAYER_ID, LAP_LINE_SOURCE_ID).withProperties(
+            lineColor(LAP_LINE_COLOR), lineWidth(5f),
+            lineCap(Property.LINE_CAP_ROUND), lineJoin(Property.LINE_JOIN_ROUND)
+        )
+    )
+    style.addSource(
+        GeoJsonSource(
+            LAP_POINT_SOURCE_ID,
+            FeatureCollection.fromFeatures(points.map { Feature.fromGeometry(it) })
+        )
+    )
+    style.addLayer(
+        CircleLayer(LAP_POINT_LAYER_ID, LAP_POINT_SOURCE_ID).withProperties(
+            circleColor(LAP_LINE_COLOR), circleRadius(7f),
+            circleStrokeColor(Color.WHITE), circleStrokeWidth(2f)
+        )
+    )
+}
+
+private fun GeodeticPosition.toLapPoint(): Point =
+    Point.fromLngLat(longitudeDeg, latitudeDeg)
 
 /** 改善済み自己位置推定をGNSS軌跡と同じMapLibre地図へ重畳する。 */
 private fun addNavigationLayers(style: Style, trackFeatures: List<Feature>) {
@@ -645,6 +698,12 @@ private const val BRAKING_START_STROKE_WIDTH_PX = 2f
 private val GNSS_GAP_COLOR = Color.rgb(0, 188, 212)
 private val BRAKING_INTERVAL_COLOR = Color.rgb(230, 81, 0)
 private val BRAKING_START_COLOR = Color.rgb(255, 109, 0)
+private const val LAP_LINE_SOURCE_ID = "playback-lap-line-source"
+private const val LAP_LINE_LAYER_ID = "playback-lap-line-layer"
+private const val LAP_POINT_SOURCE_ID = "playback-lap-point-source"
+private const val LAP_POINT_LAYER_ID = "playback-lap-point-layer"
+private const val LAP_LINE_COLOR = "#FFD600"
+
 private const val NAVIGATION_TRACK_SOURCE_ID = "playback-navigation-track-source"
 private const val NAVIGATION_TRACK_LAYER_ID = "playback-navigation-track-layer"
 private const val NAVIGATION_CURRENT_SOURCE_ID = "playback-navigation-current-source"
