@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +65,7 @@ import org.maplibre.android.style.layers.PropertyFactory.lineCap
 import org.maplibre.android.style.layers.PropertyFactory.lineColor
 import org.maplibre.android.style.layers.PropertyFactory.lineJoin
 import org.maplibre.android.style.layers.PropertyFactory.lineWidth
+import org.maplibre.android.style.layers.PropertyFactory.visibility
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
@@ -88,6 +90,7 @@ internal fun OnlinePlaybackMap(
     currentLocation: PlaybackLocation?,
     bounds: TrackBounds?,
     navigation: NavigationPlaybackResult?,
+    showNavigationTrack: Boolean,
     currentElapsedRealtimeNs: Long,
     lapConfig: LapDetectionConfig?,
     lapDraft: LapLineDraft?,
@@ -125,12 +128,15 @@ internal fun OnlinePlaybackMap(
     var followCurrentPosition by remember { mutableStateOf(false) }
     var mapOperationEnabled by remember { mutableStateOf(false) }
     var resetRequest by remember { mutableStateOf(0) }
+    // MapLibreのリスナーを再登録せず、最新の編集状態とコールバックを参照する。
+    val currentLapEditing by rememberUpdatedState(lapEditing)
+    val currentOnLapMapClick by rememberUpdatedState(onLapMapClick)
 
     LaunchedEffect(status) { onStatusChanged(status) }
 
-    DisposableEffect(
-        mapView, lifecycleOwner, trackData, navigationFeatures, lapConfig, lapDraft, lapEditing
-    ) {
+    // MapViewの生成・破棄は画面のライフサイクルにだけ連動させる。
+    // ラップ編集状態の変更では同じMapViewを再初期化しない。
+    DisposableEffect(mapView, lifecycleOwner) {
         mapView.onCreate(Bundle())
         val observer = object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) = mapView.onStart()
@@ -142,8 +148,10 @@ internal fun OnlinePlaybackMap(
         mapView.getMapAsync { readyMap ->
             map = readyMap
             readyMap.addOnMapClickListener { point ->
-                if (lapEditing) {
-                    onLapMapClick(GeodeticPosition(point.latitude, point.longitude, 0.0))
+                if (currentLapEditing) {
+                    currentOnLapMapClick(
+                        GeodeticPosition(point.latitude, point.longitude, 0.0)
+                    )
                     true
                 } else false
             }
@@ -170,9 +178,11 @@ internal fun OnlinePlaybackMap(
                 addLapLineLayers(readyStyle, lapConfig, lapDraft)
                 style = readyStyle
                 updateCurrentPosition(readyStyle, currentLocation)
+                setNavigationLayerVisibility(readyStyle, showNavigationTrack)
                 updateNavigationCurrentPosition(
                     readyStyle,
                     navigation?.nearest(currentElapsedRealtimeNs)
+                        ?.takeIf { showNavigationTrack }
                 )
                 status = OnlineMapStatus.Ready
             }
@@ -182,6 +192,13 @@ internal fun OnlinePlaybackMap(
             map = null
             style = null
             mapView.onDestroy()
+        }
+    }
+
+    // ラップ設定の開始、始点・終点の選択、方向変更ではSourceの内容だけを更新する。
+    LaunchedEffect(style, lapConfig, lapDraft) {
+        style?.let { readyStyle ->
+            updateLapLineSources(readyStyle, lapConfig, lapDraft)
         }
     }
 
@@ -234,11 +251,13 @@ internal fun OnlinePlaybackMap(
         }
     }
 
-    LaunchedEffect(style, navigation, currentElapsedRealtimeNs) {
+    LaunchedEffect(style, navigation, showNavigationTrack, currentElapsedRealtimeNs) {
         style?.let { readyStyle ->
+            setNavigationLayerVisibility(readyStyle, showNavigationTrack)
             updateNavigationCurrentPosition(
                 readyStyle,
                 navigation?.nearest(currentElapsedRealtimeNs)
+                    ?.takeIf { showNavigationTrack }
             )
         }
     }
@@ -342,6 +361,31 @@ private fun addLapLineLayers(
     )
 }
 
+/**
+ * 保存済みまたは編集中のスタートラインを既存Sourceへ反映する。
+ * 入力: MapLibreスタイル、保存済み設定、編集中設定
+ * 出力: ラインSourceと端点SourceのGeoJSON更新
+ */
+private fun updateLapLineSources(
+    style: Style,
+    config: LapDetectionConfig?,
+    draft: LapLineDraft?
+) {
+    val start = draft?.start ?: config?.lineStart
+    val end = draft?.end ?: config?.lineEnd
+    val points = listOfNotNull(start?.toLapPoint(), end?.toLapPoint())
+    val lineFeatures = if (points.size == 2) {
+        listOf(Feature.fromGeometry(LineString.fromLngLats(points)))
+    } else emptyList()
+
+    style.getSourceAs<GeoJsonSource>(LAP_LINE_SOURCE_ID)?.setGeoJson(
+        FeatureCollection.fromFeatures(lineFeatures)
+    )
+    style.getSourceAs<GeoJsonSource>(LAP_POINT_SOURCE_ID)?.setGeoJson(
+        FeatureCollection.fromFeatures(points.map { Feature.fromGeometry(it) })
+    )
+}
+
 private fun GeodeticPosition.toLapPoint(): Point =
     Point.fromLngLat(longitudeDeg, latitudeDeg)
 
@@ -375,6 +419,17 @@ private fun addNavigationLayers(style: Style, trackFeatures: List<Feature>) {
             circleStrokeWidth(2f)
         )
     )
+}
+
+/**
+ * ESKF推定軌跡と推定現在位置の表示状態を切り替える。
+ * 入力: MapLibreスタイル、表示する場合true
+ * 出力: ESKF推定軌跡レイヤーと推定現在位置レイヤーの表示状態
+ */
+private fun setNavigationLayerVisibility(style: Style, visible: Boolean) {
+    val value = if (visible) Property.VISIBLE else Property.NONE
+    style.getLayer(NAVIGATION_TRACK_LAYER_ID)?.setProperties(visibility(value))
+    style.getLayer(NAVIGATION_CURRENT_LAYER_ID)?.setProperties(visibility(value))
 }
 
 private fun updateNavigationCurrentPosition(style: Style, point: NavigationPlaybackPoint?) {

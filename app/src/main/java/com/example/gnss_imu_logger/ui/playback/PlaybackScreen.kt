@@ -242,66 +242,69 @@ private fun PlaybackDetailScreen(
             Text(it, color = MaterialTheme.colorScheme.error)
         }
 
-        LapLineEditor(
-            state = lapEditState,
-            draft = lapDraft,
-            saved = lapConfig,
-            busy = lapBusy,
-            message = lapMessage,
-            onStart = {
-                lapDraft = LapLineDraft(direction = lapConfig?.allowedDirection
-                    ?: LapCrossingDirection.LEFT_TO_RIGHT)
-                lapEditState = LapLineEditState.WAITING_FOR_START_POINT
-                lapMessage = "地図操作を有効にして始点を選択してください。"
-            },
-            onSwapDirection = {
-                lapDraft = lapDraft.copy(
-                    direction = if (lapDraft.direction == LapCrossingDirection.LEFT_TO_RIGHT)
-                        LapCrossingDirection.RIGHT_TO_LEFT
-                    else LapCrossingDirection.LEFT_TO_RIGHT
-                )
-            },
-            onCancel = {
-                lapDraft = lapConfig?.let {
-                    LapLineDraft(it.lineStart, it.lineEnd, it.allowedDirection)
-                } ?: LapLineDraft()
-                lapEditState = LapLineEditState.IDLE
-                lapMessage = null
-            },
-            onSave = {
-                val config = lapDraft.toConfig()
-                if (config == null) {
-                    lapMessage = "始点と終点を設定してください。"
-                } else coroutineScope.launch {
-                    lapBusy = true
-                    runCatching {
-                        withContext(Dispatchers.IO) {
-                            LapConfigWriter().write(item.directory, config)
-                            OfflineNavigationProcessor().process(item.directory)
-                        }
-                    }.onSuccess { result ->
-                        lapConfig = config
-                        lapEditState = LapLineEditState.IDLE
-                        lapMessage = "保存とラップ解析が完了しました: ${result.lapRecordCount}件"
-                    }.onFailure { lapMessage = "保存または解析に失敗しました: ${it.message}" }
-                    lapBusy = false
+        // オフライン解析中は地図と推定結果が未確定のため、ラップ設定UIを表示しない。
+        if (!loading) {
+            LapLineEditor(
+                state = lapEditState,
+                draft = lapDraft,
+                saved = lapConfig,
+                busy = lapBusy,
+                message = lapMessage,
+                onStart = {
+                    lapDraft = LapLineDraft(direction = lapConfig?.allowedDirection
+                        ?: LapCrossingDirection.LEFT_TO_RIGHT)
+                    lapEditState = LapLineEditState.WAITING_FOR_START_POINT
+                    lapMessage = "地図操作を有効にして始点を選択してください。"
+                },
+                onSwapDirection = {
+                    lapDraft = lapDraft.copy(
+                        direction = if (lapDraft.direction == LapCrossingDirection.LEFT_TO_RIGHT)
+                            LapCrossingDirection.RIGHT_TO_LEFT
+                        else LapCrossingDirection.LEFT_TO_RIGHT
+                    )
+                },
+                onCancel = {
+                    lapDraft = lapConfig?.let {
+                        LapLineDraft(it.lineStart, it.lineEnd, it.allowedDirection)
+                    } ?: LapLineDraft()
+                    lapEditState = LapLineEditState.IDLE
+                    lapMessage = null
+                },
+                onSave = {
+                    val config = lapDraft.toConfig()
+                    if (config == null) {
+                        lapMessage = "始点と終点を設定してください。"
+                    } else coroutineScope.launch {
+                        lapBusy = true
+                        runCatching {
+                            withContext(Dispatchers.IO) {
+                                LapConfigWriter().write(item.directory, config)
+                                OfflineNavigationProcessor().process(item.directory)
+                            }
+                        }.onSuccess { result ->
+                            lapConfig = config
+                            lapEditState = LapLineEditState.IDLE
+                            lapMessage = "保存とラップ解析が完了しました: ${result.lapRecordCount}件"
+                        }.onFailure { lapMessage = "保存または解析に失敗しました: ${it.message}" }
+                        lapBusy = false
+                    }
+                },
+                onDelete = {
+                    coroutineScope.launch {
+                        lapBusy = true
+                        runCatching { withContext(Dispatchers.IO) {
+                            LapConfigWriter().delete(item.directory)
+                        } }.onSuccess {
+                            lapConfig = null
+                            lapDraft = LapLineDraft()
+                            lapMessage = "スタートライン設定とラップ結果を削除しました。"
+                        }.onFailure { lapMessage = "削除に失敗しました: ${it.message}" }
+                        lapBusy = false
+                    }
                 }
-            },
-            onDelete = {
-                coroutineScope.launch {
-                    lapBusy = true
-                    runCatching { withContext(Dispatchers.IO) {
-                        LapConfigWriter().delete(item.directory)
-                    } }.onSuccess {
-                        lapConfig = null
-                        lapDraft = LapLineDraft()
-                        lapMessage = "スタートライン設定とラップ結果を削除しました。"
-                    }.onFailure { lapMessage = "削除に失敗しました: ${it.message}" }
-                    lapBusy = false
-                }
-            }
-        )
+            )
 
+        }
         when {
             loading -> CircularProgressIndicator()
             errorMessage != null -> Text(

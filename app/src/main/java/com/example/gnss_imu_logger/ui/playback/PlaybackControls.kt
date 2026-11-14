@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,6 +51,8 @@ internal fun PlaybackControls(
     var onlineMapStatus by remember(session) {
         mutableStateOf<OnlineMapStatus>(OnlineMapStatus.Loading)
     }
+    // GNSS軌跡と比較したい場合だけESKF推定軌跡を重ねて表示する。
+    var showNavigationTrack by remember(session.item.sessionId) { mutableStateOf(false) }
     PlaybackTrackView(
         track = track,
         currentLocation = sample?.location,
@@ -61,6 +64,7 @@ internal fun PlaybackControls(
                 currentLocation = sample?.location,
                 bounds = track.bounds,
                 navigation = navigation,
+                showNavigationTrack = showNavigationTrack,
                 currentElapsedRealtimeNs = session.startElapsedNs + state.positionMs * 1_000_000L,
                 lapConfig = lapConfig,
                 lapDraft = lapDraft,
@@ -76,6 +80,17 @@ internal fun PlaybackControls(
             VehicleDynamicsHud(
                 sample = sample,
                 modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+            )
+        }
+    )
+    FilterChip(
+        selected = showNavigationTrack,
+        onClick = { showNavigationTrack = !showNavigationTrack },
+        enabled = navigation != null,
+        label = {
+            Text(
+                if (showNavigationTrack) "ESKF推定軌跡: 表示中"
+                else "ESKF推定軌跡: 非表示"
             )
         }
     )
