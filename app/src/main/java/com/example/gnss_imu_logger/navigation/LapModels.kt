@@ -14,6 +14,7 @@ data class LapDetectionConfig(
     val rearmDistanceM: Double = 40.0,
     val maximumPositionUncertaintyM: Double = 20.0,
     val lineEndExtensionM: Double = 10.0,
+    val maximumUncertaintyExtensionM: Double = 15.0,
     val minimumNormalSpeedMps: Double = 1.0
 ) {
     init {
@@ -22,6 +23,9 @@ data class LapDetectionConfig(
         require(rearmDistanceM > 0.0) { "再アーム距離は0 mより大きくしてください。" }
         require(maximumPositionUncertaintyM > 0.0) { "位置不確かさ上限は0 mより大きくしてください。" }
         require(lineEndExtensionM >= 0.0) { "ライン端の許容延長は0 m以上にしてください。" }
+        require(maximumUncertaintyExtensionM >= 0.0) {
+            "位置不確かさによる延長上限は0 m以上にしてください。"
+        }
         require(minimumNormalSpeedMps >= 0.0) { "最低法線速度は0 m/s以上にしてください。" }
     }
 }
@@ -43,7 +47,8 @@ data class LapRecord(
     val positionUncertaintyM: Double?,
     val positionSource: LapPositionSource,
     val valid: Boolean,
-    val invalidReason: String
+    val invalidReason: String,
+    val durationOutlier: Boolean
 )
 
 data class LapEventRecord(
@@ -53,6 +58,11 @@ data class LapEventRecord(
     val signedDistanceBeforeM: Double,
     val signedDistanceAfterM: Double,
     val lineRatio: Double?,
+    val crossedInfiniteLine: Boolean,
+    val endpointDistanceM: Double?,
+    val baseExtensionM: Double,
+    val uncertaintyExtensionM: Double,
+    val effectiveExtensionM: Double,
     val crossingSpeedMps: Double,
     val normalSpeedMps: Double,
     val positionUncertaintyM: Double?,

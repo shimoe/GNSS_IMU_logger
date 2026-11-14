@@ -35,6 +35,8 @@ class LapConfigReader {
             maximumPositionUncertaintyM =
                 json.optDouble("maximum_position_uncertainty_m", 20.0),
             lineEndExtensionM = json.optDouble("line_end_extension_m", 10.0),
+            maximumUncertaintyExtensionM =
+                json.optDouble("maximum_uncertainty_extension_m", 15.0),
             minimumNormalSpeedMps = json.optDouble("minimum_normal_speed_mps", 1.0)
         )
     }

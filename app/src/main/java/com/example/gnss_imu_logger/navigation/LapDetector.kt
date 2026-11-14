@@ -15,8 +15,7 @@ class LapDetector(
     private val plane = LocalTangentPlane(origin)
     private val geometry = LapGeometry(
         start = plane.toEnu(config.lineStart.copy(altitudeM = origin.altitudeM)),
-        end = plane.toEnu(config.lineEnd.copy(altitudeM = origin.altitudeM)),
-        extensionM = config.lineEndExtensionM
+        end = plane.toEnu(config.lineEnd.copy(altitudeM = origin.altitudeM))
     )
 
     fun analyze(samples: List<NavigationPredictionSample>): LapAnalysisResult {
@@ -40,10 +39,13 @@ class LapDetector(
             }
             val beforeDistanceM = geometry.signedDistance(previous.positionEnuM)
             val afterDistanceM = geometry.signedDistance(current.positionEnuM)
-            val intersection = geometry.intersection(previous.positionEnuM, current.positionEnuM)
-            if (intersection.intersects) {
+            val candidate = geometry.crossingCandidate(
+                previous.positionEnuM,
+                current.positionEnuM
+            )
+            if (candidate.crossedInfiniteLine) {
                 val stateBefore = state
-                val ratio = requireNotNull(intersection.trackRatio).coerceIn(0.0, 1.0)
+                val ratio = requireNotNull(candidate.trackRatio).coerceIn(0.0, 1.0)
                 val crossingNs = interpolateTime(
                     previous.elapsedRealtimeNs,
                     current.elapsedRealtimeNs,
@@ -56,6 +58,12 @@ class LapDetector(
                 )
                 val normalSpeedMps = geometry.normalSpeed(current.velocityEnuMps)
                 val uncertaintyM = current.uncertainty?.horizontalPositionStdM
+                val uncertaintyExtensionM = uncertaintyM
+                    ?.coerceAtLeast(0.0)
+                    ?.coerceAtMost(config.maximumUncertaintyExtensionM)
+                    ?: 0.0
+                val effectiveExtensionM = config.lineEndExtensionM + uncertaintyExtensionM
+                val endpointDistanceM = requireNotNull(candidate.endpointDistanceM)
                 val rejection = rejectionReason(
                     state = state,
                     crossingNs = crossingNs,
@@ -65,7 +73,9 @@ class LapDetector(
                     uncertaintyM = uncertaintyM,
                     status = current.status,
                     beforeDistanceM = beforeDistanceM,
-                    afterDistanceM = afterDistanceM
+                    afterDistanceM = afterDistanceM,
+                    endpointDistanceM = endpointDistanceM,
+                    effectiveExtensionM = effectiveExtensionM
                 )
                 if (rejection.isEmpty()) {
                     val distanceAtCrossingM = currentDistanceM - segmentDistanceM * (1.0 - ratio)
@@ -102,7 +112,12 @@ class LapDetector(
                     stateAfter = state,
                     signedDistanceBeforeM = beforeDistanceM,
                     signedDistanceAfterM = afterDistanceM,
-                    lineRatio = intersection.lineRatio,
+                    lineRatio = candidate.lineRatio,
+                    crossedInfiniteLine = candidate.crossedInfiniteLine,
+                    endpointDistanceM = endpointDistanceM,
+                    baseExtensionM = config.lineEndExtensionM,
+                    uncertaintyExtensionM = uncertaintyExtensionM,
+                    effectiveExtensionM = effectiveExtensionM,
                     crossingSpeedMps = speedMps,
                     normalSpeedMps = normalSpeedMps,
                     positionUncertaintyM = uncertaintyM,
@@ -124,7 +139,7 @@ class LapDetector(
                 uncertaintyM = last.uncertainty?.horizontalPositionStdM
             )
         }
-        return LapAnalysisResult(records, events)
+        return LapAnalysisResult(markDurationOutliers(records), events)
     }
 
     private fun rejectionReason(
@@ -136,7 +151,9 @@ class LapDetector(
         uncertaintyM: Double?,
         status: NavigationPredictionStatus,
         beforeDistanceM: Double,
-        afterDistanceM: Double
+        afterDistanceM: Double,
+        endpointDistanceM: Double,
+        effectiveExtensionM: Double
     ): String = when {
         state != LapDetectionState.ARMED -> "NOT_REARMED"
         status != NavigationPredictionStatus.PREDICTING -> "NO_VALID_POSITION"
@@ -144,6 +161,7 @@ class LapDetector(
             uncertaintyM > config.maximumPositionUncertaintyM -> "POSITION_UNCERTAIN"
         speedMps < config.minimumSpeedMps -> "SPEED_TOO_LOW"
         !isAllowedDirection(beforeDistanceM, afterDistanceM, normalSpeedMps) -> "WRONG_DIRECTION"
+        endpointDistanceM > effectiveExtensionM -> "OUTSIDE_LINE_SEGMENT"
         lastAcceptedCrossingNs != null &&
             crossingNs - lastAcceptedCrossingNs <
             (config.minimumLapDurationSec * NS_PER_SEC).toLong() -> "MINIMUM_LAP_TIME"
@@ -182,8 +200,31 @@ class LapDetector(
             positionUncertaintyM = uncertaintyM,
             positionSource = LapPositionSource.OFFLINE_NAVIGATION,
             valid = true,
-            invalidReason = ""
+            invalidReason = "",
+            durationOutlier = false
         )
+    }
+
+    /** 計測ラップが3件以上ある場合、全体中央値の1.8倍を超えるラップへ警告を付ける。 */
+    private fun markDurationOutliers(records: List<LapRecord>): List<LapRecord> {
+        val durations = records
+            .filter { it.lapType == LapType.TIMED_LAP && it.valid }
+            .map { it.durationSec }
+            .sorted()
+        if (durations.size < 3) return records
+        val middle = durations.size / 2
+        val median = if (durations.size % 2 == 0) {
+            (durations[middle - 1] + durations[middle]) * 0.5
+        } else {
+            durations[middle]
+        }
+        return records.map { record ->
+            record.copy(
+                durationOutlier = record.lapType == LapType.TIMED_LAP &&
+                    record.valid &&
+                    record.durationSec > median * 1.8
+            )
+        }
     }
 
     private fun horizontalDistance(first: EnuPosition, second: EnuPosition): Double =

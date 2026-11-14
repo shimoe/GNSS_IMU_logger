@@ -3,11 +3,7 @@ package com.example.gnss_imu_logger.navigation
 import kotlin.math.hypot
 
 /** 方向付きスタートラインの局所ENU幾何計算。 */
-class LapGeometry(
-    start: EnuPosition,
-    end: EnuPosition,
-    extensionM: Double
-) {
+class LapGeometry(start: EnuPosition, end: EnuPosition) {
     private val start2 = Vec2(start.eastM, start.northM)
     private val end2 = Vec2(end.eastM, end.northM)
     private val line = end2 - start2
@@ -16,7 +12,6 @@ class LapGeometry(
     }
     private val tangent = line / lengthM
     private val normal = Vec2(-tangent.y, tangent.x)
-    private val extensionRatio = extensionM / lengthM
 
     fun signedDistance(position: EnuPosition): Double =
         (Vec2(position.eastM, position.northM) - start2).dot(normal)
@@ -30,17 +25,22 @@ class LapGeometry(
     fun normalSpeed(velocity: EnuVelocity): Double =
         Vec2(velocity.eastMps, velocity.northMps).dot(normal)
 
-    fun intersection(previous: EnuPosition, current: EnuPosition): LapIntersection {
+    /** 無限ラインとの交差候補を返し、有限線分の受理範囲はLapDetectorで判定する。 */
+    fun crossingCandidate(previous: EnuPosition, current: EnuPosition): LapCrossingCandidate {
         val movement = Vec2(current.eastM - previous.eastM, current.northM - previous.northM)
         val origin = Vec2(previous.eastM, previous.northM)
         val denominator = movement.cross(line)
-        if (kotlin.math.abs(denominator) < 1e-12) return LapIntersection.none()
+        if (kotlin.math.abs(denominator) < 1e-12) return LapCrossingCandidate.none()
         val delta = start2 - origin
         val trackRatio = delta.cross(line) / denominator
         val lineRatio = delta.cross(movement) / denominator
-        val intersects = trackRatio in 0.0..1.0 &&
-            lineRatio in -extensionRatio..(1.0 + extensionRatio)
-        return LapIntersection(intersects, trackRatio, lineRatio)
+        if (trackRatio !in 0.0..1.0) return LapCrossingCandidate.none()
+        val endpointDistanceM = when {
+            lineRatio < 0.0 -> -lineRatio * lengthM
+            lineRatio > 1.0 -> (lineRatio - 1.0) * lengthM
+            else -> 0.0
+        }
+        return LapCrossingCandidate(true, trackRatio, lineRatio, endpointDistanceM)
     }
 
     private data class Vec2(val x: Double, val y: Double) {
@@ -54,10 +54,11 @@ class LapGeometry(
     }
 }
 
-data class LapIntersection(
-    val intersects: Boolean,
+data class LapCrossingCandidate(
+    val crossedInfiniteLine: Boolean,
     val trackRatio: Double?,
-    val lineRatio: Double?
+    val lineRatio: Double?,
+    val endpointDistanceM: Double?
 ) {
-    companion object { fun none() = LapIntersection(false, null, null) }
+    companion object { fun none() = LapCrossingCandidate(false, null, null, null) }
 }

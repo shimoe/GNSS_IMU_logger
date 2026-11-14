@@ -10,7 +10,8 @@ class LapResultWriter(private val sessionDirectory: File) {
             writer.appendLine(
                 "lap_index,lap_type,start_elapsed_realtime_ns,finish_elapsed_realtime_ns," +
                     "duration_sec,distance_m,average_speed_mps,crossing_speed_mps," +
-                    "position_uncertainty_m,position_source,valid,invalid_reason"
+                    "position_uncertainty_m,position_source,valid,invalid_reason," +
+                    "duration_outlier"
             )
             result.records.forEach { value ->
                 writer.appendLine(listOf(
@@ -18,7 +19,7 @@ class LapResultWriter(private val sessionDirectory: File) {
                     value.finishElapsedRealtimeNs, value.durationSec.f(), value.distanceM.f(),
                     value.averageSpeedMps.f(), value.crossingSpeedMps.f(),
                     value.positionUncertaintyM.f(), value.positionSource.name,
-                    value.valid, value.invalidReason
+                    value.valid, value.invalidReason, value.durationOutlier
                 ).joinToString(","))
             }
         }
@@ -26,14 +27,19 @@ class LapResultWriter(private val sessionDirectory: File) {
         sessionDirectory.resolve(EVENT_FILE_NAME).bufferedWriter(Charsets.UTF_8).use { writer ->
             writer.appendLine(
                 "elapsed_realtime_ns,state_before,state_after,signed_distance_before_m," +
-                    "signed_distance_after_m,line_ratio,crossing_speed_mps,normal_speed_mps," +
+                    "signed_distance_after_m,line_ratio,crossed_infinite_line," +
+                    "endpoint_distance_m,base_extension_m,uncertainty_extension_m," +
+                    "effective_extension_m,crossing_speed_mps,normal_speed_mps," +
                     "position_uncertainty_m,accepted,rejection_reason"
             )
             result.events.forEach { value ->
                 writer.appendLine(listOf(
                     value.elapsedRealtimeNs, value.stateBefore.name, value.stateAfter.name,
                     value.signedDistanceBeforeM.f(), value.signedDistanceAfterM.f(),
-                    value.lineRatio.f(), value.crossingSpeedMps.f(), value.normalSpeedMps.f(),
+                    value.lineRatio.f(), value.crossedInfiniteLine,
+                    value.endpointDistanceM.f(), value.baseExtensionM.f(),
+                    value.uncertaintyExtensionM.f(), value.effectiveExtensionM.f(),
+                    value.crossingSpeedMps.f(), value.normalSpeedMps.f(),
                     value.positionUncertaintyM.f(), value.accepted, value.rejectionReason
                 ).joinToString(","))
             }
