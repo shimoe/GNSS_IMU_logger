@@ -1,6 +1,7 @@
 package com.example.gnss_imu_logger.playback
 
 import java.io.File
+import kotlin.math.cos
 import kotlin.math.sqrt
 
 /** 改善済みオフライン自己位置推定を再生画面用モデルへ読み込む。 */
@@ -10,6 +11,7 @@ class NavigationPlaybackReader {
         require(predictionFile.isFile) {
             "自己位置推定結果がありません: ${predictionFile.path}"
         }
+        val origin = readOrigin(sessionDirectory)
         val points = mutableListOf<NavigationPlaybackPoint>()
         CsvRowReader(predictionFile).forEachRow { row ->
             val elapsedRealtimeNs = row.requiredLong("elapsed_realtime_ns")
@@ -26,7 +28,9 @@ class NavigationPlaybackReader {
                 speedMps = sqrt(eastMps * eastMps + northMps * northMps),
                 yawRad = row.optionalDouble("yaw_rad"),
                 horizontalPositionStdM = row.optionalDouble("horizontal_position_std_m"),
-                status = row["status"].orEmpty()
+                status = row["status"].orEmpty(),
+                latitudeDeg = origin?.latitudeFromNorth(northM),
+                longitudeDeg = origin?.longitudeFromEast(eastM)
             )
         }
         require(points.isNotEmpty()) { "自己位置推定結果が空です。" }
@@ -35,6 +39,32 @@ class NavigationPlaybackReader {
             assessment = readAssessment(sessionDirectory),
             source = NavigationPlaybackSource.OFFLINE_NAVIGATION
         )
+    }
+
+
+    /** 初期化で使用したGNSS観測をENU原点として取得する。 */
+    private fun readOrigin(sessionDirectory: File): NavigationPlaybackOrigin? {
+        val initializationFile = sessionDirectory.resolve(INITIALIZATION_FILE_NAME)
+        val gnssFile = sessionDirectory.resolve(GNSS_FILE_NAME)
+        if (!initializationFile.isFile || !gnssFile.isFile) return null
+        var positionSourceNs: Long? = null
+        CsvRowReader(initializationFile).forEachRow { row ->
+            positionSourceNs = row["position_source_ns"]?.toLongOrNull()
+        }
+        val targetNs = positionSourceNs ?: return null
+        var nearestTimeDifferenceNs = Long.MAX_VALUE
+        var result: NavigationPlaybackOrigin? = null
+        CsvRowReader(gnssFile).forEachRow { row ->
+            val elapsedRealtimeNs = row["elapsed_realtime_ns"]?.toLongOrNull() ?: return@forEachRow
+            val differenceNs = kotlin.math.abs(elapsedRealtimeNs - targetNs)
+            if (differenceNs < nearestTimeDifferenceNs) {
+                val latitudeDeg = row["latitude_deg"]?.toDoubleOrNull() ?: return@forEachRow
+                val longitudeDeg = row["longitude_deg"]?.toDoubleOrNull() ?: return@forEachRow
+                result = NavigationPlaybackOrigin(latitudeDeg, longitudeDeg)
+                nearestTimeDifferenceNs = differenceNs
+            }
+        }
+        return result
     }
 
     private fun readAssessment(sessionDirectory: File): String? {
@@ -59,6 +89,8 @@ class NavigationPlaybackReader {
     companion object {
         private const val PREDICTION_FILE_NAME = "navigation_prediction.csv"
         private const val SUMMARY_FILE_NAME = "navigation_prediction_summary.csv"
+        private const val INITIALIZATION_FILE_NAME = "navigation_initialization.csv"
+        private const val GNSS_FILE_NAME = "gnss.csv"
     }
 }
 
@@ -89,8 +121,25 @@ data class NavigationPlaybackPoint(
     val speedMps: Double,
     val yawRad: Double?,
     val horizontalPositionStdM: Double?,
-    val status: String
+    val status: String,
+    val latitudeDeg: Double?,
+    val longitudeDeg: Double?
 )
+
+data class NavigationPlaybackOrigin(
+    val latitudeDeg: Double,
+    val longitudeDeg: Double
+) {
+    fun latitudeFromNorth(northM: Double): Double =
+        latitudeDeg + Math.toDegrees(northM / EARTH_RADIUS_M)
+
+    fun longitudeFromEast(eastM: Double): Double =
+        longitudeDeg + Math.toDegrees(
+            eastM / (EARTH_RADIUS_M * cos(Math.toRadians(latitudeDeg)))
+        )
+
+    companion object { private const val EARTH_RADIUS_M = 6_378_137.0 }
+}
 
 enum class NavigationPlaybackSource {
     OFFLINE_NAVIGATION,

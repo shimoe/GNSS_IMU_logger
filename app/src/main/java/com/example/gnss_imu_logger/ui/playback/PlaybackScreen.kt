@@ -233,6 +233,7 @@ private fun PlaybackDetailScreen(
             state != null && playbackSession != null -> PlaybackControls(
                 state = requireNotNull(state),
                 session = requireNotNull(playbackSession),
+                navigation = navigationPlayback,
                 onPlayPause = {
                     val playbackController = controller ?: return@PlaybackControls
                     if (playbackController.state.playing) {
@@ -252,16 +253,6 @@ private fun PlaybackDetailScreen(
                     controller?.setSpeed(speed)
                     state = controller?.state
                 }
-            )
-        }
-        val currentState = state
-        val currentSession = playbackSession
-        val navigation = navigationPlayback
-        if (currentState != null && currentSession != null && navigation != null) {
-            NavigationPlaybackTrackView(
-                navigation = navigation,
-                currentElapsedRealtimeNs = currentSession.startElapsedNs +
-                    currentState.positionMs * 1_000_000L
             )
         }
     }

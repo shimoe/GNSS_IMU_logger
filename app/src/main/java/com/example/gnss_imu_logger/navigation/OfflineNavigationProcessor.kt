@@ -78,6 +78,9 @@ class OfflineNavigationProcessor {
             NavigationPitchReferenceWriter(sessionDirectory).write(
                 result.pitchReferenceRecords
             )
+            NavigationEskfInjectionWriter(sessionDirectory).write(
+                result.eskfInjectionRecords
+            )
             val processResult = OfflineNavigationProcessResult(
                 deviceMount = prepared.deviceMount.name,
                 predictionSampleCount = result.prediction.samples.size,
@@ -130,11 +133,13 @@ class OfflineNavigationProcessor {
                 writer.appendLine("heading_reacquisition_applied,true")
                 writer.appendLine("barometric_vertical_update_applied,true")
                 writer.appendLine("gnss_position_velocity_update_applied,true")
+                writer.appendLine("eskf_covariance_role,HORIZONTAL_YAW_STATE_UPDATE")
+                writer.appendLine("eskf_yaw_update_applied,true")
+                writer.appendLine("eskf_position_velocity_update_applied,false")
+                writer.appendLine("eskf_roll_pitch_update_applied,false")
+                writer.appendLine("eskf_bias_update_applied,false")
                 writer.appendLine("accelerometer_bias_update_applied,false")
                 writer.appendLine("accelerometer_bias_update_role,DIAGNOSTIC_ONLY")
-                writer.appendLine("eskf_covariance_role,UNCERTAINTY_DIAGNOSTIC_ONLY")
-                writer.appendLine("horizontal_error_analysis_role,DIAGNOSTIC_ONLY")
-                writer.appendLine("pitch_reference_analysis_role,DIAGNOSTIC_ONLY")
             }
     }
 
@@ -150,6 +155,7 @@ class OfflineNavigationProcessor {
             "navigation_gsi_terrain_elevation.csv",
             "navigation_gsi_terrain_error.txt",
             "navigation_heading_direction.csv",
+            "navigation_eskf_injection.csv",
             "navigation_horizontal_error_analysis.csv",
             "navigation_heading_tracking.csv",
             "navigation_initialization.csv",

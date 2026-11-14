@@ -49,6 +49,8 @@ class GnssAidedOfflineNavigationPredictor(
         )
         var variance = NavigationAxisVariance.DEFAULT
         var eskfCovariance = NavigationEskfCovariance.initial(eskfNoiseParameters)
+        val eskfStateInjector = NavigationEskfStateInjector()
+        val eskfInjectionRecords = mutableListOf<NavigationEskfInjectionRecord>()
         var accelerationBodyMps2: BodyVector? = null
         var angularRateBodyRadps: BodyVector? = null
         var nextOutputNs = initialization.endElapsedRealtimeNs
@@ -256,10 +258,45 @@ class GnssAidedOfflineNavigationPredictor(
                             consecutivePositionRejections = 0
                             consecutiveVelocityRejections = 0
                         }
-                        eskfCovariance = eskfCovariance.updateGnss(
+                        val eskfMeasurement = eskfCovariance.updateGnssErrorState(
+                            stateBeforeGnss = stateBeforeGnss,
                             measurement = event.update,
                             positionAccepted = result.positionAccepted,
                             velocityAccepted = result.velocityAccepted
+                        )
+                        eskfCovariance = eskfMeasurement.covariance
+                        val eskfHorizontalSpeedMps = event.update.velocityEnuMps?.let {
+                            kotlin.math.hypot(it.eastMps, it.northMps)
+                        } ?: kotlin.math.hypot(
+                            result.state.velocityEnuMps.eastMps,
+                            result.state.velocityEnuMps.northMps
+                        )
+                        val eskfYawRateRadps = angularRateBodyRadps?.z
+                        val eskfInjection = eskfStateInjector.injectYaw(
+                            state = result.state,
+                            errorState = eskfMeasurement.errorState,
+                            horizontalSpeedMps = eskfHorizontalSpeedMps,
+                            yawRateRadps = eskfYawRateRadps,
+                            valid = eskfMeasurement.valid
+                        )
+                        result = result.copy(state = eskfInjection.state)
+                        eskfCovariance = eskfCovariance.resetYawError(
+                            eskfInjection.appliedYawCorrectionRad
+                        )
+                        eskfInjectionRecords += NavigationEskfInjectionRecord(
+                            elapsedRealtimeNs = event.elapsedRealtimeNs,
+                            positionAccepted = result.positionAccepted,
+                            velocityAccepted = result.velocityAccepted,
+                            rawYawCorrectionRad = eskfInjection.rawYawCorrectionRad,
+                            appliedYawCorrectionRad = eskfInjection.appliedYawCorrectionRad,
+                            horizontalSpeedMps = eskfInjection.horizontalSpeedMps,
+                            yawRateRadps = eskfInjection.yawRateRadps,
+                            turningUpdate = eskfInjection.turningUpdate,
+                            yawLimited = eskfInjection.yawLimited,
+                            applied = eskfInjection.applied,
+                            fallbackReason = eskfInjection.fallbackReason,
+                            covarianceMinimumDiagonal = eskfCovariance.minimumDiagonal(),
+                            covarianceMaximumAsymmetry = eskfCovariance.maximumAsymmetry()
                         )
                         val headingProbe = headingUpdater.update(
                             attitudeBodyToEnu = result.state.attitudeBodyToEnu,
@@ -495,7 +532,8 @@ class GnssAidedOfflineNavigationPredictor(
             headingTrackingRecords = headingTrackingRecords,
             accelerometerBiasUpdates = accelerometerBiasUpdates,
             horizontalErrorRecords = horizontalErrorRecords,
-            pitchReferenceRecords = pitchReferenceRecords
+            pitchReferenceRecords = pitchReferenceRecords,
+            eskfInjectionRecords = eskfInjectionRecords
         )
     }
 
@@ -701,7 +739,8 @@ data class GnssAidedNavigationResult(
     val headingTrackingRecords: List<NavigationHeadingTrackingRecord>,
     val accelerometerBiasUpdates: List<NavigationAccelerometerBiasUpdateRecord>,
     val horizontalErrorRecords: List<NavigationHorizontalErrorRecord>,
-    val pitchReferenceRecords: List<NavigationPitchReferenceRecord>
+    val pitchReferenceRecords: List<NavigationPitchReferenceRecord>,
+    val eskfInjectionRecords: List<NavigationEskfInjectionRecord>
 )
 
 data class NavigationAttitudePredictionRecord(

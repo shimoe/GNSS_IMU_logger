@@ -24,11 +24,13 @@ import com.example.gnss_imu_logger.playback.PlaybackSession
 import com.example.gnss_imu_logger.playback.PlaybackState
 import com.example.gnss_imu_logger.playback.PlaybackTrack
 import com.example.gnss_imu_logger.playback.PlaybackTrackView
+import com.example.gnss_imu_logger.playback.NavigationPlaybackResult
 
 @Composable
 internal fun PlaybackControls(
     state: PlaybackState,
     session: PlaybackSession,
+    navigation: NavigationPlaybackResult?,
     onPlayPause: () -> Unit,
     onRestart: () -> Unit,
     onSeek: (Long) -> Unit,
@@ -52,6 +54,8 @@ internal fun PlaybackControls(
                 locations = session.locations,
                 currentLocation = sample?.location,
                 bounds = track.bounds,
+                navigation = navigation,
+                currentElapsedRealtimeNs = session.startElapsedNs + state.positionMs * 1_000_000L,
                 onStatusChanged = { status ->
                     onlineMapStatus = status
                 },

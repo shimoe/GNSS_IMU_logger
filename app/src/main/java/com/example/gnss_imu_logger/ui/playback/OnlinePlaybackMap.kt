@@ -35,6 +35,8 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.example.gnss_imu_logger.playback.PlaybackLocation
 import com.example.gnss_imu_logger.playback.TrackBounds
+import com.example.gnss_imu_logger.playback.NavigationPlaybackResult
+import com.example.gnss_imu_logger.playback.NavigationPlaybackPoint
 import kotlinx.coroutines.delay
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -83,6 +85,8 @@ internal fun OnlinePlaybackMap(
     locations: List<PlaybackLocation>,
     currentLocation: PlaybackLocation?,
     bounds: TrackBounds?,
+    navigation: NavigationPlaybackResult?,
+    currentElapsedRealtimeNs: Long,
     onStatusChanged: (OnlineMapStatus) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -90,6 +94,13 @@ internal fun OnlinePlaybackMap(
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraPaddingPx = with(LocalDensity.current) { CAMERA_PADDING_DP.dp.roundToPx() }
     val trackData = remember(locations) { OnlineTrackData.from(locations) }
+    val navigationFeatures = remember(navigation) {
+        navigation?.points
+            ?.mapNotNull { it.toMapPoint() }
+            ?.takeIf { it.size >= 2 }
+            ?.let { listOf(Feature.fromGeometry(LineString.fromLngLats(it))) }
+            .orEmpty()
+    }
     val mapView = remember {
         MapLibre.getInstance(context)
         MapView(context).apply {
@@ -111,7 +122,7 @@ internal fun OnlinePlaybackMap(
 
     LaunchedEffect(status) { onStatusChanged(status) }
 
-    DisposableEffect(mapView, lifecycleOwner, trackData) {
+    DisposableEffect(mapView, lifecycleOwner, trackData, navigationFeatures) {
         mapView.onCreate(Bundle())
         val observer = object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) = mapView.onStart()
@@ -141,8 +152,13 @@ internal fun OnlinePlaybackMap(
                     startFeatures = trackData.brakingStartFeatures
                 )
                 addCurrentPositionLayers(readyStyle)
+                addNavigationLayers(readyStyle, navigationFeatures)
                 style = readyStyle
                 updateCurrentPosition(readyStyle, currentLocation)
+                updateNavigationCurrentPosition(
+                    readyStyle,
+                    navigation?.nearest(currentElapsedRealtimeNs)
+                )
                 status = OnlineMapStatus.Ready
             }
         }
@@ -200,6 +216,15 @@ internal fun OnlinePlaybackMap(
     LaunchedEffect(style, currentLocation) {
         style?.let { readyStyle ->
             updateCurrentPosition(readyStyle, currentLocation)
+        }
+    }
+
+    LaunchedEffect(style, navigation, currentElapsedRealtimeNs) {
+        style?.let { readyStyle ->
+            updateNavigationCurrentPosition(
+                readyStyle,
+                navigation?.nearest(currentElapsedRealtimeNs)
+            )
         }
     }
 
@@ -265,6 +290,54 @@ internal fun OnlinePlaybackMap(
             }
         }
     }
+}
+
+/** 改善済み自己位置推定をGNSS軌跡と同じMapLibre地図へ重畳する。 */
+private fun addNavigationLayers(style: Style, trackFeatures: List<Feature>) {
+    style.addSource(
+        GeoJsonSource(
+            NAVIGATION_TRACK_SOURCE_ID,
+            FeatureCollection.fromFeatures(trackFeatures)
+        )
+    )
+    style.addLayer(
+        LineLayer(NAVIGATION_TRACK_LAYER_ID, NAVIGATION_TRACK_SOURCE_ID).withProperties(
+            lineColor(NAVIGATION_TRACK_COLOR),
+            lineWidth(NAVIGATION_TRACK_WIDTH_PX),
+            lineCap(Property.LINE_CAP_ROUND),
+            lineJoin(Property.LINE_JOIN_ROUND)
+        )
+    )
+    style.addSource(
+        GeoJsonSource(
+            NAVIGATION_CURRENT_SOURCE_ID,
+            FeatureCollection.fromFeatures(emptyArray())
+        )
+    )
+    style.addLayer(
+        CircleLayer(NAVIGATION_CURRENT_LAYER_ID, NAVIGATION_CURRENT_SOURCE_ID).withProperties(
+            circleColor(NAVIGATION_CURRENT_COLOR),
+            circleRadius(NAVIGATION_CURRENT_RADIUS_PX),
+            circleStrokeColor(Color.WHITE),
+            circleStrokeWidth(2f)
+        )
+    )
+}
+
+private fun updateNavigationCurrentPosition(style: Style, point: NavigationPlaybackPoint?) {
+    val source = style.getSourceAs<GeoJsonSource>(NAVIGATION_CURRENT_SOURCE_ID) ?: return
+    val mapPoint = point?.toMapPoint()
+    source.setGeoJson(
+        FeatureCollection.fromFeatures(
+            if (mapPoint == null) emptyArray() else arrayOf(Feature.fromGeometry(mapPoint))
+        )
+    )
+}
+
+private fun NavigationPlaybackPoint.toMapPoint(): Point? {
+    val latitude = latitudeDeg?.takeIf { it.isFinite() } ?: return null
+    val longitude = longitudeDeg?.takeIf { it.isFinite() } ?: return null
+    return Point.fromLngLat(longitude, latitude)
 }
 
 /** 現在位置の円と円内の進行方向矢印を追加する。 */
@@ -572,6 +645,15 @@ private const val BRAKING_START_STROKE_WIDTH_PX = 2f
 private val GNSS_GAP_COLOR = Color.rgb(0, 188, 212)
 private val BRAKING_INTERVAL_COLOR = Color.rgb(230, 81, 0)
 private val BRAKING_START_COLOR = Color.rgb(255, 109, 0)
+private const val NAVIGATION_TRACK_SOURCE_ID = "playback-navigation-track-source"
+private const val NAVIGATION_TRACK_LAYER_ID = "playback-navigation-track-layer"
+private const val NAVIGATION_CURRENT_SOURCE_ID = "playback-navigation-current-source"
+private const val NAVIGATION_CURRENT_LAYER_ID = "playback-navigation-current-layer"
+private const val NAVIGATION_TRACK_COLOR = "#1565C0"
+private const val NAVIGATION_CURRENT_COLOR = "#00B0FF"
+private const val NAVIGATION_TRACK_WIDTH_PX = 4f
+private const val NAVIGATION_CURRENT_RADIUS_PX = 7f
+
 private const val CURRENT_POSITION_SOURCE_ID = "playback-current-position-source"
 private const val CURRENT_POSITION_CIRCLE_LAYER_ID = "playback-current-position-circle-layer"
 private const val CURRENT_POSITION_ARROW_LAYER_ID = "playback-current-position-arrow-layer"

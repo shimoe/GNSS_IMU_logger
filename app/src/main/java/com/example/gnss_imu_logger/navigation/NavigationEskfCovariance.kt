@@ -108,6 +108,91 @@ class NavigationEskfCovariance private constructor(
      * 公称状態とIMUバイアスは変更しない。既存推定経路を維持したまま、
      * GNSS観測による15状態共分散の収束だけを評価する段階の実装である。
      */
+
+    /**
+     * GNSS水平位置・速度innovationで15状態誤差ベクトルと共分散を更新する。
+     * 入力: GNSS更新前の公称状態、GNSS観測、既存ゲートの採用結果
+     * 出力: 水平観測から推定した誤差状態とJoseph更新後の共分散
+     *
+     * 初回実装ではEast/North位置・速度だけを観測する。公称状態へ注入する成分は
+     * NavigationEskfStateInjector側でyawに限定し、roll・pitch・IMUバイアスは変更しない。
+     */
+    fun updateGnssErrorState(
+        stateBeforeGnss: NavigationState,
+        measurement: NavigationGnssUpdate,
+        positionAccepted: Boolean,
+        velocityAccepted: Boolean
+    ): NavigationEskfMeasurementResult {
+        var covariance = values.copyOf()
+        val errorState = DoubleArray(NavigationErrorStateIndex.SIZE)
+        var valid = true
+        fun updateAxis(stateIndex: Int, innovation: Double, variance: Double) {
+            if (!innovation.isFinite() || !variance.isFinite() || variance <= 0.0) {
+                valid = false
+                return
+            }
+            val innovationVariance = covariance[index(stateIndex, stateIndex)] + variance
+            if (!innovationVariance.isFinite() || innovationVariance <= 0.0) {
+                valid = false
+                return
+            }
+            val gain = DoubleArray(NavigationErrorStateIndex.SIZE) { row ->
+                covariance[index(row, stateIndex)] / innovationVariance
+            }
+            val remainingInnovation = innovation - errorState[stateIndex]
+            repeat(NavigationErrorStateIndex.SIZE) { row ->
+                errorState[row] += gain[row] * remainingInnovation
+            }
+            covariance = scalarJosephUpdate(covariance, stateIndex, variance)
+        }
+
+        if (positionAccepted) {
+            val variance = measurement.positionStdM * measurement.positionStdM
+            updateAxis(
+                NavigationErrorStateIndex.POSITION,
+                measurement.positionEnuM.eastM - stateBeforeGnss.positionEnuM.eastM,
+                variance
+            )
+            updateAxis(
+                NavigationErrorStateIndex.POSITION + 1,
+                measurement.positionEnuM.northM - stateBeforeGnss.positionEnuM.northM,
+                variance
+            )
+        }
+        if (velocityAccepted && measurement.velocityEnuMps != null) {
+            val variance = measurement.speedStdMps * measurement.speedStdMps
+            updateAxis(
+                NavigationErrorStateIndex.VELOCITY,
+                measurement.velocityEnuMps.eastMps - stateBeforeGnss.velocityEnuMps.eastMps,
+                variance
+            )
+            updateAxis(
+                NavigationErrorStateIndex.VELOCITY + 1,
+                measurement.velocityEnuMps.northMps - stateBeforeGnss.velocityEnuMps.northMps,
+                variance
+            )
+        }
+        val updated = NavigationEskfCovariance(symmetrize(covariance))
+        return NavigationEskfMeasurementResult(
+            covariance = updated,
+            errorState = errorState,
+            valid = valid && updated.minimumDiagonal() >= 0.0 &&
+                updated.maximumAsymmetry().isFinite()
+        )
+    }
+
+    /** yaw誤差注入後の姿勢誤差共分散を一次近似でリセットする。 */
+    fun resetYawError(yawCorrectionRad: Double): NavigationEskfCovariance {
+        if (!yawCorrectionRad.isFinite() || abs(yawCorrectionRad) < 1e-12) return this
+        val reset = identityMatrix()
+        val attitude = NavigationErrorStateIndex.ATTITUDE
+        reset[index(attitude, attitude + 1)] += 0.5 * yawCorrectionRad
+        reset[index(attitude + 1, attitude)] -= 0.5 * yawCorrectionRad
+        return NavigationEskfCovariance(
+            symmetrize(multiply(multiply(reset, values), transpose(reset)))
+        )
+    }
+
     fun updateGnss(
         measurement: NavigationGnssUpdate,
         positionAccepted: Boolean,
@@ -318,3 +403,10 @@ class NavigationEskfCovariance private constructor(
         private fun index(row: Int, column: Int): Int = row * STATE_SIZE + column
     }
 }
+
+
+data class NavigationEskfMeasurementResult(
+    val covariance: NavigationEskfCovariance,
+    val errorState: DoubleArray,
+    val valid: Boolean
+)
