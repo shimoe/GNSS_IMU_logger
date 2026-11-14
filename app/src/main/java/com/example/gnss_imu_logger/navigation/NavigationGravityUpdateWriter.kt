@@ -26,7 +26,8 @@ class NavigationGravityUpdateWriter(
                     "gravity_residual_before_rad,gravity_residual_after_rad," +
                     "residual_reduction_rad,correction_improved_residual," +
                     "current_direction_residual_after_rad,opposite_direction_residual_after_rad," +
-                    "preferred_correction_direction,cumulative_pitch_correction_rad,rejection_reason"
+                    "preferred_correction_direction,applied_correction_direction," +
+                    "cumulative_pitch_correction_rad,rejection_reason"
             )
             records.forEach { record ->
                 writer.appendLine(
@@ -56,6 +57,7 @@ class NavigationGravityUpdateWriter(
                         record.currentDirectionResidualAfterRad.format(),
                         record.oppositeDirectionResidualAfterRad.format(),
                         record.preferredCorrectionDirection.name,
+                        record.appliedCorrectionDirection.name,
                         record.cumulativePitchCorrectionRad.format(),
                         record.rejectionReason.name
                     ).joinToString(",")

@@ -11,12 +11,12 @@ import kotlin.math.sqrt
  * 入力: 車体からENUへの姿勢、車体加速度[m/s^2]、車体角速度[rad/s]、時間差[s]
  * 出力: 現行方向を適用した姿勢と、現行方向・逆方向の補正後重力残差
  *
- * applyPreferredGravityDirection=falseでは従来の補正方向を維持する。
- * 診断結果だけで本系の姿勢を変更しない。
+ * applyPreferredGravityDirection=trueでは、診断で残差が小さい方向を本系へ適用する。
+ * 現在ログでは受理した全観測が逆方向を支持したため、既定値をtrueとする。
  */
 class NavigationGravityUpdater(
     private val parameters: NavigationGravityParameters = NavigationGravityParameters.DEFAULT,
-    private val applyPreferredGravityDirection: Boolean = false
+    private val applyPreferredGravityDirection: Boolean = true
 ) {
     fun update(
         attitudeBodyToEnu: AttitudeQuaternion,
@@ -67,9 +67,15 @@ class NavigationGravityUpdater(
         val oppositeResidualAfterRad = gravityResidualRad(oppositeCandidate, measuredUpBody)
         val preferredDirection = preferredDirection(currentResidualAfterRad, oppositeResidualAfterRad)
 
-        // 初回は診断専用。falseでは従来と同じcurrentCandidateを必ず本系へ適用する。
-        val appliedAttitude = if (applyPreferredGravityDirection &&
+        // 有効化時は、同じ観測で重力残差が小さくなる候補を適用する。
+        // 判定不能時は従来方向を維持し、姿勢を不連続に切り替えない。
+        val appliedDirection = if (
+            applyPreferredGravityDirection &&
             preferredDirection == NavigationGravityCorrectionDirection.OPPOSITE
+        ) NavigationGravityCorrectionDirection.OPPOSITE
+        else NavigationGravityCorrectionDirection.CURRENT
+        val appliedAttitude = if (
+            appliedDirection == NavigationGravityCorrectionDirection.OPPOSITE
         ) oppositeCandidate else currentCandidate
         val residualAfterRad = gravityResidualRad(appliedAttitude, measuredUpBody)
         val reductionRad = residualAfterRad?.let { residualBeforeRad - abs(it) }
@@ -90,6 +96,7 @@ class NavigationGravityUpdater(
             currentDirectionResidualAfterRad = currentResidualAfterRad,
             oppositeDirectionResidualAfterRad = oppositeResidualAfterRad,
             preferredCorrectionDirection = preferredDirection,
+            appliedCorrectionDirection = appliedDirection,
             rejectionReason = NavigationGravityRejectionReason.ACCEPTED
         )
     }
@@ -129,6 +136,7 @@ class NavigationGravityUpdater(
         attitude, true, true, accelerationNorm, angularRateNorm, residual, 0.0,
         vehicleGrade(attitude), vehicleGrade(attitude), residual, residual, 0.0, false,
         residual, residual, NavigationGravityCorrectionDirection.INCONCLUSIVE,
+        NavigationGravityCorrectionDirection.INCONCLUSIVE,
         NavigationGravityRejectionReason.ACCEPTED
     )
 
@@ -136,6 +144,7 @@ class NavigationGravityUpdater(
         attitude, false, false, null, null, null, null,
         vehicleGrade(attitude), vehicleGrade(attitude), null, null, null, null,
         null, null, NavigationGravityCorrectionDirection.INCONCLUSIVE,
+        NavigationGravityCorrectionDirection.INCONCLUSIVE,
         NavigationGravityRejectionReason.OBSERVATION_UNAVAILABLE
     )
 
@@ -143,7 +152,8 @@ class NavigationGravityUpdater(
         residual: Double?, reason: NavigationGravityRejectionReason) = NavigationGravityUpdateResult(
         attitude, true, false, accelerationNorm, angularRateNorm, residual, null,
         vehicleGrade(attitude), vehicleGrade(attitude), residual, residual, null, null,
-        null, null, NavigationGravityCorrectionDirection.INCONCLUSIVE, reason
+        null, null, NavigationGravityCorrectionDirection.INCONCLUSIVE,
+        NavigationGravityCorrectionDirection.INCONCLUSIVE, reason
     )
 
     private fun BodyVector.norm() = sqrt(x * x + y * y + z * z)
@@ -188,6 +198,7 @@ data class NavigationGravityUpdateResult(
     val currentDirectionResidualAfterRad: Double?,
     val oppositeDirectionResidualAfterRad: Double?,
     val preferredCorrectionDirection: NavigationGravityCorrectionDirection,
+    val appliedCorrectionDirection: NavigationGravityCorrectionDirection,
     val rejectionReason: NavigationGravityRejectionReason
 )
 

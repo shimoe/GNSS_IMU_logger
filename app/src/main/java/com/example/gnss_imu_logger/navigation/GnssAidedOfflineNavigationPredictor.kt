@@ -221,6 +221,7 @@ class GnssAidedOfflineNavigationPredictor(
                                 currentDirectionResidualAfterRad = gravityResult.currentDirectionResidualAfterRad,
                                 oppositeDirectionResidualAfterRad = gravityResult.oppositeDirectionResidualAfterRad,
                                 preferredCorrectionDirection = gravityResult.preferredCorrectionDirection,
+                                appliedCorrectionDirection = gravityResult.appliedCorrectionDirection,
                                 cumulativePitchCorrectionRad = cumulativeGravityPitchCorrectionRad,
                                 rejectionReason = gravityResult.rejectionReason
                             )
@@ -756,6 +757,7 @@ data class NavigationGravityUpdateRecord(
     val currentDirectionResidualAfterRad: Double?,
     val oppositeDirectionResidualAfterRad: Double?,
     val preferredCorrectionDirection: NavigationGravityCorrectionDirection,
+    val appliedCorrectionDirection: NavigationGravityCorrectionDirection,
     val cumulativePitchCorrectionRad: Double,
     val rejectionReason: NavigationGravityRejectionReason
 )
