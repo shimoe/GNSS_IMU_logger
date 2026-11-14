@@ -39,6 +39,9 @@ import com.example.gnss_imu_logger.playback.PlaybackState
 import com.example.gnss_imu_logger.playback.PlaybackTimeline
 import com.example.gnss_imu_logger.playback.NavigationPlaybackReader
 import com.example.gnss_imu_logger.playback.NavigationPlaybackResult
+import com.example.gnss_imu_logger.playback.LapResultReader
+import com.example.gnss_imu_logger.playback.PlaybackRange
+import com.example.gnss_imu_logger.navigation.LapRecord
 import com.example.gnss_imu_logger.playback.SessionCatalog
 import com.example.gnss_imu_logger.playback.SessionListItem
 import com.example.gnss_imu_logger.playback.SessionLogReader
@@ -169,6 +172,8 @@ private fun PlaybackDetailScreen(
     var lapEditState by remember(item.sessionId) { mutableStateOf(LapLineEditState.IDLE) }
     var lapBusy by remember(item.sessionId) { mutableStateOf(false) }
     var lapMessage by remember(item.sessionId) { mutableStateOf<String?>(null) }
+    var laps by remember(item.sessionId) { mutableStateOf<List<LapRecord>>(emptyList()) }
+    var playbackRange by remember(item.sessionId) { mutableStateOf(PlaybackRange.whole(0L)) }
 
     LaunchedEffect(item.sessionId) {
         loading = true
@@ -199,6 +204,7 @@ private fun PlaybackDetailScreen(
                     "改善済み推定軌跡を読み込めないため、GNSS表示を使用します: ${it.message}"
                 null
             }
+            laps = withContext(Dispatchers.IO) { LapResultReader().read(item.directory) }
         }.onFailure {
             navigationMessage = null
             navigationWarning =
@@ -212,6 +218,7 @@ private fun PlaybackDetailScreen(
             playbackSession = session
             controller = PlaybackController(PlaybackTimeline(session))
             state = controller?.state
+            playbackRange = PlaybackRange.whole(controller?.state?.durationMs ?: 0L)
         }.onFailure {
             errorMessage = "セッションを読み込めませんでした: ${it.message}"
         }
@@ -222,6 +229,11 @@ private fun PlaybackDetailScreen(
         val playbackController = controller ?: return@LaunchedEffect
         while (playbackController.state.playing) {
             state = playbackController.update(SystemClock.elapsedRealtime())
+            if (playbackController.state.positionMs >= playbackRange.finishMs) {
+                playbackController.pause()
+                state = playbackController.seek(playbackRange.finishMs)
+                break
+            }
             delay(PLAYBACK_UPDATE_MS)
         }
     }
@@ -242,6 +254,67 @@ private fun PlaybackDetailScreen(
             Text(it, color = MaterialTheme.colorScheme.error)
         }
 
+        when {
+            loading -> CircularProgressIndicator()
+            errorMessage != null -> Text(
+                errorMessage.orEmpty(),
+                color = MaterialTheme.colorScheme.error
+            )
+            state != null && playbackSession != null -> PlaybackControls(
+                state = requireNotNull(state),
+                session = requireNotNull(playbackSession),
+                navigation = navigationPlayback,
+                lapConfig = lapConfig,
+                lapDraft = if (lapEditState == LapLineEditState.IDLE) null else lapDraft,
+                lapEditing = lapEditState != LapLineEditState.IDLE,
+                laps = laps,
+                playbackRange = playbackRange,
+                onPlaybackRangeChanged = { range ->
+                    controller?.pause()
+                    playbackRange = range
+                    state = controller?.seek(range.startMs)
+                },
+                onLapMapClick = { point ->
+                    when (lapEditState) {
+                        LapLineEditState.WAITING_FOR_START_POINT -> {
+                            lapDraft = lapDraft.copy(start = point)
+                            lapEditState = LapLineEditState.WAITING_FOR_END_POINT
+                        }
+                        LapLineEditState.WAITING_FOR_END_POINT -> {
+                            lapDraft = lapDraft.copy(end = point)
+                            lapEditState = LapLineEditState.READY_TO_SAVE
+                        }
+                        else -> Unit
+                    }
+                },
+                onPlayPause = {
+                    val playbackController = controller ?: return@PlaybackControls
+                    if (playbackController.state.playing) {
+                        playbackController.pause()
+                    } else {
+                        if (playbackController.state.positionMs >= playbackRange.finishMs) {
+                            playbackController.seek(playbackRange.startMs)
+                        }
+                        playbackController.play(SystemClock.elapsedRealtime())
+                    }
+                    state = playbackController.state
+                },
+                onRestart = {
+                    val playbackController = controller ?: return@PlaybackControls
+                    playbackController.pause()
+                    state = playbackController.seek(playbackRange.startMs)
+                },
+                onSeek = { positionMs ->
+                    state = controller?.seek(
+                        positionMs.coerceIn(playbackRange.startMs, playbackRange.finishMs)
+                    )
+                },
+                onSpeedChanged = { speed ->
+                    controller?.setSpeed(speed)
+                    state = controller?.state
+                }
+            )
+        }
         // オフライン解析中は地図と推定結果が未確定のため、ラップ設定UIを表示しない。
         if (!loading) {
             LapLineEditor(
@@ -285,6 +358,7 @@ private fun PlaybackDetailScreen(
                             lapConfig = config
                             lapEditState = LapLineEditState.IDLE
                             lapMessage = "保存とラップ解析が完了しました: ${result.lapRecordCount}件"
+                laps = withContext(Dispatchers.IO) { LapResultReader().read(item.directory) }
                         }.onFailure { lapMessage = "保存または解析に失敗しました: ${it.message}" }
                         lapBusy = false
                     }
@@ -298,59 +372,14 @@ private fun PlaybackDetailScreen(
                             lapConfig = null
                             lapDraft = LapLineDraft()
                             lapMessage = "スタートライン設定とラップ結果を削除しました。"
+                laps = emptyList()
+                playbackRange = PlaybackRange.whole(controller?.state?.durationMs ?: 0L)
                         }.onFailure { lapMessage = "削除に失敗しました: ${it.message}" }
                         lapBusy = false
                     }
                 }
             )
 
-        }
-        when {
-            loading -> CircularProgressIndicator()
-            errorMessage != null -> Text(
-                errorMessage.orEmpty(),
-                color = MaterialTheme.colorScheme.error
-            )
-            state != null && playbackSession != null -> PlaybackControls(
-                state = requireNotNull(state),
-                session = requireNotNull(playbackSession),
-                navigation = navigationPlayback,
-                lapConfig = lapConfig,
-                lapDraft = if (lapEditState == LapLineEditState.IDLE) null else lapDraft,
-                lapEditing = lapEditState != LapLineEditState.IDLE,
-                onLapMapClick = { point ->
-                    when (lapEditState) {
-                        LapLineEditState.WAITING_FOR_START_POINT -> {
-                            lapDraft = lapDraft.copy(start = point)
-                            lapEditState = LapLineEditState.WAITING_FOR_END_POINT
-                        }
-                        LapLineEditState.WAITING_FOR_END_POINT -> {
-                            lapDraft = lapDraft.copy(end = point)
-                            lapEditState = LapLineEditState.READY_TO_SAVE
-                        }
-                        else -> Unit
-                    }
-                },
-                onPlayPause = {
-                    val playbackController = controller ?: return@PlaybackControls
-                    if (playbackController.state.playing) {
-                        playbackController.pause()
-                    } else {
-                        playbackController.play(SystemClock.elapsedRealtime())
-                    }
-                    state = playbackController.state
-                },
-                onRestart = {
-                    state = controller?.restart()
-                },
-                onSeek = { positionMs ->
-                    state = controller?.seek(positionMs)
-                },
-                onSpeedChanged = { speed ->
-                    controller?.setSpeed(speed)
-                    state = controller?.state
-                }
-            )
         }
     }
 }

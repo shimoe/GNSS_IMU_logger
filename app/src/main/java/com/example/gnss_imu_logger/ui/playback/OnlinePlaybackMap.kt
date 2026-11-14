@@ -195,6 +195,18 @@ internal fun OnlinePlaybackMap(
         }
     }
 
+    // ラップ選択で表示対象が変わった場合は、MapViewを再生成せず軌跡Sourceだけを更新する。
+    LaunchedEffect(style, trackData) {
+        style?.let { readyStyle ->
+            updateTrackSources(readyStyle, trackData)
+        }
+    }
+    LaunchedEffect(style, navigationFeatures) {
+        style?.getSourceAs<GeoJsonSource>(NAVIGATION_TRACK_SOURCE_ID)?.setGeoJson(
+            FeatureCollection.fromFeatures(navigationFeatures)
+        )
+    }
+
     // ラップ設定の開始、始点・終点の選択、方向変更ではSourceの内容だけを更新する。
     LaunchedEffect(style, lapConfig, lapDraft) {
         style?.let { readyStyle ->
@@ -575,6 +587,28 @@ private fun addSpeedTrackLayers(
     }
 }
 
+
+/**
+ * 選択再生区間に合わせて既存のGNSS軌跡Sourceを更新する。
+ * 入力: MapLibreスタイル、表示対象の速度別軌跡
+ * 出力: 速度区分、GNSS欠損、制動区間、制動開始位置のGeoJSON更新
+ */
+private fun updateTrackSources(style: Style, trackData: OnlineTrackData) {
+    SpeedBand.entries.forEach { band ->
+        style.getSourceAs<GeoJsonSource>("playback-speed-source-${band.id}")?.setGeoJson(
+            FeatureCollection.fromFeatures(trackData.features[band].orEmpty())
+        )
+    }
+    style.getSourceAs<GeoJsonSource>(GNSS_GAP_SOURCE_ID)?.setGeoJson(
+        FeatureCollection.fromFeatures(trackData.gnssGapFeatures)
+    )
+    style.getSourceAs<GeoJsonSource>(BRAKING_INTERVAL_SOURCE_ID)?.setGeoJson(
+        FeatureCollection.fromFeatures(trackData.brakingIntervalFeatures)
+    )
+    style.getSourceAs<GeoJsonSource>(BRAKING_START_SOURCE_ID)?.setGeoJson(
+        FeatureCollection.fromFeatures(trackData.brakingStartFeatures)
+    )
+}
 
 /** GNSS欠損前後をシアン色の専用線として表示する。 */
 private fun addGnssGapLayer(

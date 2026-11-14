@@ -10,6 +10,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -26,8 +27,11 @@ import com.example.gnss_imu_logger.playback.PlaybackState
 import com.example.gnss_imu_logger.playback.PlaybackTrack
 import com.example.gnss_imu_logger.playback.PlaybackTrackView
 import com.example.gnss_imu_logger.playback.NavigationPlaybackResult
+import com.example.gnss_imu_logger.playback.PlaybackLocation
 import com.example.gnss_imu_logger.navigation.LapDetectionConfig
 import com.example.gnss_imu_logger.navigation.GeodeticPosition
+import com.example.gnss_imu_logger.navigation.LapRecord
+import com.example.gnss_imu_logger.playback.PlaybackRange
 
 @Composable
 internal fun PlaybackControls(
@@ -37,6 +41,9 @@ internal fun PlaybackControls(
     lapConfig: LapDetectionConfig?,
     lapDraft: LapLineDraft?,
     lapEditing: Boolean,
+    laps: List<LapRecord>,
+    playbackRange: PlaybackRange,
+    onPlaybackRangeChanged: (PlaybackRange) -> Unit,
     onLapMapClick: (GeodeticPosition) -> Unit,
     onPlayPause: () -> Unit,
     onRestart: () -> Unit,
@@ -44,7 +51,19 @@ internal fun PlaybackControls(
     onSpeedChanged: (Double) -> Unit
 ) {
     val sample = state.sample
-    val track = remember(session) { PlaybackTrack(session.locations) }
+    // ラップ選択中は、地図へ渡すGNSS軌跡とESKF推定軌跡を選択区間内に限定する。
+    val displayedLocations = remember(session, playbackRange.startMs, playbackRange.finishMs) {
+        session.locations.inPlaybackRange(session, playbackRange)
+    }
+    val displayedNavigation = remember(
+        navigation,
+        session.startElapsedNs,
+        playbackRange.startMs,
+        playbackRange.finishMs
+    ) {
+        navigation?.inPlaybackRange(session, playbackRange)
+    }
+    val track = remember(displayedLocations) { PlaybackTrack(displayedLocations) }
     val analysisSummary = remember(session) {
         PlaybackAnalysisSummaryCalculator.calculate(session)
     }
@@ -60,10 +79,10 @@ internal fun PlaybackControls(
         showSimpleTrack = onlineMapStatus !is OnlineMapStatus.Ready,
         background = {
             OnlinePlaybackMap(
-                locations = session.locations,
+                locations = displayedLocations,
                 currentLocation = sample?.location,
                 bounds = track.bounds,
-                navigation = navigation,
+                navigation = displayedNavigation,
                 showNavigationTrack = showNavigationTrack,
                 currentElapsedRealtimeNs = session.startElapsedNs + state.positionMs * 1_000_000L,
                 lapConfig = lapConfig,
@@ -83,22 +102,20 @@ internal fun PlaybackControls(
             )
         }
     )
-    FilterChip(
-        selected = showNavigationTrack,
-        onClick = { showNavigationTrack = !showNavigationTrack },
-        enabled = navigation != null,
-        label = {
-            Text(
-                if (showNavigationTrack) "ESKF推定軌跡: 表示中"
-                else "ESKF推定軌跡: 非表示"
-            )
-        }
+    Text(
+        text = sample?.location?.speedMps?.let { "%.1f km/h".format(it * 3.6) } ?: "--.- km/h",
+        style = MaterialTheme.typography.headlineSmall
     )
-    Text("再生位置: ${formatPlaybackDuration(state.positionMs)} / ${formatPlaybackDuration(state.durationMs)}")
+    val relativePositionMs = playbackRange.relativePositionMs(state.positionMs)
+    Text(
+        "${playbackRange.label}  ${formatPlaybackDuration(relativePositionMs)} / " +
+            formatPlaybackDuration(playbackRange.durationMs)
+    )
     Slider(
-        value = state.positionMs.toFloat(),
+        value = state.positionMs.coerceIn(playbackRange.startMs, playbackRange.finishMs).toFloat(),
         onValueChange = { onSeek(it.toLong()) },
-        valueRange = 0f..state.durationMs.coerceAtLeast(1L).toFloat(),
+        valueRange = playbackRange.startMs.toFloat()..
+            playbackRange.finishMs.coerceAtLeast(playbackRange.startMs + 1L).toFloat(),
         modifier = Modifier.fillMaxWidth()
     )
     Row(
@@ -109,9 +126,26 @@ internal fun PlaybackControls(
             Text(if (state.playing) "一時停止" else "再生")
         }
         Button(onClick = onRestart, modifier = Modifier.weight(1f)) {
-            Text("先頭へ戻る")
+            Text(if (playbackRange.lap == null) "先頭へ戻る" else "ラップ先頭へ戻る")
         }
     }
+    FilterChip(
+        selected = showNavigationTrack,
+        onClick = { showNavigationTrack = !showNavigationTrack },
+        enabled = displayedNavigation != null,
+        label = {
+            Text(
+                if (showNavigationTrack) "ESKF推定軌跡: 表示中"
+                else "ESKF推定軌跡: 非表示"
+            )
+        }
+    )
+    PlaybackLapSelector(
+        laps = laps,
+        selected = playbackRange,
+        onSelectWhole = { onPlaybackRangeChanged(PlaybackRange.whole(state.durationMs)) },
+        onSelectLap = { onPlaybackRangeChanged(PlaybackRange.from(session, it)) }
+    )
     Text("再生速度")
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -134,7 +168,6 @@ internal fun PlaybackControls(
     PlaybackAnalysisSummaryPanel(analysisSummary)
     PlaybackDiagnosticsPanel(session)
     HorizontalDivider()
-    Text("速度: ${sample?.location?.speedMps?.let { "%.1f km/h".format(it * 3.6) } ?: "未取得"}")
     Text(
         "前後加速度: ${sample?.location?.longitudinalAccelerationMps2?.let { "%+.2f m/s²".format(it) } ?: "未取得"}"
     )
@@ -165,3 +198,37 @@ private fun playbackSpeedText(speed: Double): String = when (speed) {
     4.0 -> "4×"
     else -> "${speed}×"
 }
+
+
+/**
+ * 選択再生区間内のGNSS位置だけを返す。
+ * 入力: セッション、再生区間[ms]
+ * 出力: 区間開始・終了を含むGNSS位置
+ */
+private fun List<PlaybackLocation>.inPlaybackRange(
+    session: PlaybackSession,
+    range: PlaybackRange
+): List<PlaybackLocation> {
+    if (range.lap == null) return this
+    val startNs = session.startElapsedNs + range.startMs * NS_PER_MS
+    val finishNs = session.startElapsedNs + range.finishMs * NS_PER_MS
+    return filter { it.elapsedRealtimeNs in startNs..finishNs }
+}
+
+/**
+ * 選択再生区間内のESKF推定点だけを返す。
+ * 入力: セッション、再生区間[ms]
+ * 出力: 区間開始・終了を含むESKF推定結果。2点未満の場合はnull
+ */
+private fun NavigationPlaybackResult.inPlaybackRange(
+    session: PlaybackSession,
+    range: PlaybackRange
+): NavigationPlaybackResult? {
+    if (range.lap == null) return this
+    val startNs = session.startElapsedNs + range.startMs * NS_PER_MS
+    val finishNs = session.startElapsedNs + range.finishMs * NS_PER_MS
+    val selectedPoints = points.filter { it.elapsedRealtimeNs in startNs..finishNs }
+    return takeIf { selectedPoints.size >= 2 }?.copy(points = selectedPoints)
+}
+
+private const val NS_PER_MS = 1_000_000L
