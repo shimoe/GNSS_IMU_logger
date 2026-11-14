@@ -1,6 +1,7 @@
 package com.example.gnss_imu_logger.navigation
 
 import java.io.File
+import org.json.JSONObject
 
 /** 保存済みセッションのオフラインナビゲーション解析を一括実行する。 */
 class OfflineNavigationProcessor {
@@ -81,6 +82,14 @@ class OfflineNavigationProcessor {
             NavigationEskfInjectionWriter(sessionDirectory).write(
                 result.eskfInjectionRecords
             )
+            val lapAnalysis = LapConfigReader().readOrNull(sessionDirectory)?.let { config ->
+                LapDetector(config, prepared.origin).analyze(result.prediction.samples).also { lap ->
+                    LapResultWriter(sessionDirectory).write(
+                        result = lap,
+                        writeEvents = isDiagnosticSession(sessionDirectory)
+                    )
+                }
+            }
             val processResult = OfflineNavigationProcessResult(
                 deviceMount = prepared.deviceMount.name,
                 predictionSampleCount = result.prediction.samples.size,
@@ -89,6 +98,8 @@ class OfflineNavigationProcessor {
                 measurementUpdateCount = result.measurementUpdates.size,
                 gravityUpdateCount = result.gravityUpdates.size,
                 attitudePredictionCount = result.attitudePredictionCount,
+                lapRecordCount = lapAnalysis?.records?.size ?: 0,
+                lapEventCount = lapAnalysis?.events?.size ?: 0,
                 assessment = summary.assessment
             )
             status.complete()
@@ -97,6 +108,17 @@ class OfflineNavigationProcessor {
             status.fail(stage, error)
             throw error
         }
+    }
+
+    /** session.jsonの計測モードを読み込み、診断CSVを出力するか決める。 */
+    private fun isDiagnosticSession(sessionDirectory: File): Boolean {
+        val file = sessionDirectory.resolve("session.json")
+        if (!file.isFile) return false
+        return runCatching {
+            JSONObject(file.readText(Charsets.UTF_8))
+                .optString("mode", "")
+                .equals("diagnostic", ignoreCase = true)
+        }.getOrDefault(false)
     }
 
     /** 前回の解析結果を削除し、異なる実装世代のCSVが混在しないようにする。 */
@@ -165,7 +187,9 @@ class OfflineNavigationProcessor {
             "navigation_prediction.csv",
             "navigation_prediction_summary.csv",
             "navigation_vertical_reference.csv",
-            "navigation_vertical_update.csv"
+            "navigation_vertical_update.csv",
+            "lap_results.csv",
+            "lap_events.csv"
         )
     }
 }
@@ -178,5 +202,7 @@ data class OfflineNavigationProcessResult(
     val measurementUpdateCount: Int,
     val gravityUpdateCount: Int,
     val attitudePredictionCount: Long,
+    val lapRecordCount: Int,
+    val lapEventCount: Int,
     val assessment: NavigationPredictionAssessment
 )
