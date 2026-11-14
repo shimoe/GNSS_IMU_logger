@@ -32,6 +32,8 @@ import com.example.gnss_imu_logger.playback.PlaybackController
 import com.example.gnss_imu_logger.playback.PlaybackSession
 import com.example.gnss_imu_logger.playback.PlaybackState
 import com.example.gnss_imu_logger.playback.PlaybackTimeline
+import com.example.gnss_imu_logger.playback.NavigationPlaybackReader
+import com.example.gnss_imu_logger.playback.NavigationPlaybackResult
 import com.example.gnss_imu_logger.playback.SessionCatalog
 import com.example.gnss_imu_logger.playback.SessionListItem
 import com.example.gnss_imu_logger.playback.SessionLogReader
@@ -152,6 +154,9 @@ private fun PlaybackDetailScreen(
     var errorMessage by remember(item.sessionId) { mutableStateOf<String?>(null) }
     var navigationMessage by remember(item.sessionId) { mutableStateOf<String?>(null) }
     var navigationWarning by remember(item.sessionId) { mutableStateOf<String?>(null) }
+    var navigationPlayback by remember(item.sessionId) {
+        mutableStateOf<NavigationPlaybackResult?>(null)
+    }
 
     LaunchedEffect(item.sessionId) {
         loading = true
@@ -167,6 +172,15 @@ private fun PlaybackDetailScreen(
             navigationMessage =
                 "オフライン解析完了: 予測${result.predictionSampleCount}件、" +
                     "GNSS残差${result.gnssResidualCount}件"
+            navigationPlayback = runCatching {
+                withContext(Dispatchers.IO) {
+                    NavigationPlaybackReader().read(item.directory)
+                }
+            }.getOrElse {
+                navigationWarning =
+                    "改善済み推定軌跡を読み込めないため、GNSS表示を使用します: ${it.message}"
+                null
+            }
         }.onFailure {
             navigationMessage = null
             navigationWarning =
@@ -238,6 +252,16 @@ private fun PlaybackDetailScreen(
                     controller?.setSpeed(speed)
                     state = controller?.state
                 }
+            )
+        }
+        val currentState = state
+        val currentSession = playbackSession
+        val navigation = navigationPlayback
+        if (currentState != null && currentSession != null && navigation != null) {
+            NavigationPlaybackTrackView(
+                navigation = navigation,
+                currentElapsedRealtimeNs = currentSession.startElapsedNs +
+                    currentState.positionMs * 1_000_000L
             )
         }
     }
